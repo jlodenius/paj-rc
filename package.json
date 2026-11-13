@@ -1,0 +1,14 @@
+{
+  "name": "paj-rc",
+  "version": "0.1.0",
+  "description": "Private browser control for live main Paj and Pi sessions on Linux",
+  "type": "module",
+  "engines": { "node": ">=22.19.0" },
+  "os": ["linux"],
+  "bin": { "paj-rc": "src/cli.js" },
+  "scripts": { "test": "node --test tests/*.test.js", "start": "node src/cli.js serve" },
+  "files": ["extensions", "src", "public", "README.md"],
+  "keywords": ["pi-package", "paj", "remote-control"],
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*" },
+  "pi": { "extensions": ["extensions/index.ts"] }
+}

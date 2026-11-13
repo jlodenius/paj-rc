@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#171b19">
+  <title>Paj Remote</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <main id="login" class="login" hidden>
+    <form id="login-form" class="login-card" method="post">
+      <span class="brand">paj<span class="brand-dot"> / </span>remote</span>
+      <h1>Your sessions, within reach.</h1>
+      <p>Connect to your running main agents. Work stays on your computer.</p>
+      <label for="key">Pairing key</label>
+      <input id="key" type="password" autocomplete="current-password" required spellcheck="false">
+      <button id="connect" type="submit" class="primary">Connect</button>
+      <p id="login-error" class="error" role="alert"></p>
+      <small>Find your pairing key using the CLI <code>key</code> command in the README.</small>
+    </form>
+  </main>
+  <div id="workspace" class="workspace" hidden>
+    <aside class="sidebar" aria-label="Sessions">
+      <header class="sidebar-header">
+        <span class="brand">paj<span class="brand-dot"> / </span>remote</span>
+        <span id="connection" class="connection" role="status">Connecting</span>
+      </header>
+      <div class="section-heading"><h1>Main sessions</h1><button id="refresh" class="quiet">Refresh</button></div>
+      <nav id="sessions" aria-label="Choose a session"></nav>
+      <p id="list-empty" class="empty" hidden>No main sessions online.<br>Open Pi on your computer to get started.</p>
+      <footer class="sidebar-footer"><span>Private connection</span><button id="logout" class="quiet">Log out</button></footer>
+    </aside>
+    <main class="conversation">
+      <header class="conversation-header">
+        <button id="back" class="quiet back" aria-label="Back to sessions">← Sessions</button>
+        <div class="heading"><h2 id="session-name">Choose a session</h2><p id="session-context">Your live workspace</p></div>
+        <span id="session-status" class="status"></span>
+      </header>
+      <div id="notice" class="notice" role="status" hidden></div>
+      <div id="transcript" class="transcript" tabindex="0" aria-label="Conversation">
+        <button id="older" class="quiet older" hidden>Load earlier messages</button>
+        <div id="messages"></div>
+        <div id="welcome" class="welcome"><span class="welcome-mark">↗</span><h2>Pick up where you left off.</h2><p>Choose a main session to read its conversation and send an instruction.</p></div>
+      </div>
+      <form id="composer" class="composer" method="post">
+        <label for="prompt" class="sr-only">Message to selected session</label>
+        <textarea id="prompt" placeholder="Send an instruction…" rows="3" maxlength="16000" disabled></textarea>
+        <div class="composer-actions">
+          <div class="delivery"><label for="deliver-as">If busy</label><select id="deliver-as"><option value="reject">Reject</option><option value="steer">Steer current run</option><option value="followUp">Queue follow-up</option></select></div>
+          <div class="send-actions"><button id="stop" type="button" class="quiet" disabled>Stop run</button><button id="send" type="submit" class="primary" disabled>Send <span aria-hidden="true">↑</span></button></div>
+        </div>
+        <p id="composer-hint" class="composer-hint">Instructions run in the selected live Pi session.</p>
+      </form>
+    </main>
+  </div>
+  <noscript>This application needs JavaScript to connect to your live sessions.</noscript>
+</body>
+</html>
