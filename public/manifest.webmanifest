@@ -1,6 +1,6 @@
 {
-  "name": "Paj Remote",
-  "short_name": "Paj Remote",
+  "name": "paj-rc",
+  "short_name": "paj-rc",
   "id": "/",
   "start_url": "/",
   "scope": "/",

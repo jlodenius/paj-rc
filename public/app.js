@@ -2,6 +2,7 @@ import { createTranscript, applySnapshot, applyEvent, prependHistory } from './s
 import { renderMarkdown } from './markdown.js';
 import { prepareImage } from './images.js';
 import { MAX_IMAGES } from './image-limits.js';
+import { compactProjectPath } from './paths.js';
 
 if (globalThis.isSecureContext && globalThis.navigator?.serviceWorker) {
   navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' }).catch(() => {});
@@ -46,6 +47,39 @@ let preparingPhotos = false;
 let photoError = '';
 let photoRevision = 0;
 let removePhotoButtons = [];
+let projectPaths = [];
+let headerPath;
+
+function fitProjectPaths() {
+  for (const entry of [...projectPaths, ...(headerPath ? [headerPath] : [])]) {
+    const width = entry.container.clientWidth;
+    if (!width) continue;
+    const probe = document.createElement('span');
+    probe.className = 'path-measure';
+    probe.setAttribute('aria-hidden', 'true');
+    entry.container.append(probe);
+    const measure = text => {
+      probe.textContent = text;
+      return probe.getBoundingClientRect().width;
+    };
+    let available = width;
+    if (entry.branch) {
+      const branchWidth = measure(entry.branch.textContent) + 8;
+      const directories = entry.fullPath.split('/').filter(Boolean);
+      const minimum = directories.length > 1 ? `../${directories.at(-1)}` : entry.fullPath;
+      if (branchWidth + measure(minimum) <= width) available -= branchWidth;
+    }
+    entry.node.textContent = compactProjectPath(entry.fullPath, text => measure(text) <= available);
+    probe.remove();
+  }
+}
+
+if (globalThis.ResizeObserver) {
+  const observer = new ResizeObserver(fitProjectPaths);
+  observer.observe($('workspace'));
+  observer.observe($('session-context'));
+}
+document.fonts?.ready.then(fitProjectPaths);
 
 function clearPhotos() {
   photoRevision++;
@@ -283,6 +317,7 @@ async function refreshSessions(resnapshot = false) {
 }
 
 function renderSessions() {
+  projectPaths = [];
   const nodes = sessions.map(session => {
     const button = document.createElement('button');
     button.className = 'session-card';
@@ -293,15 +328,22 @@ function renderSessions() {
     const context = document.createElement('span');
     context.className = 'session-project';
     context.textContent = session.projectRoot || 'No project';
+    context.title = context.textContent;
+    projectPaths.push({ container: context, node: context, fullPath: context.textContent });
     const detail = document.createElement('span');
     detail.className = 'session-detail';
-    detail.textContent = `${session.branch || 'No branch'} · ${statusText(session.state)}`;
+    detail.textContent = `${session.branch || 'No branch'} `;
+    const separator = document.createElement('span');
+    separator.className = 'session-separator';
+    separator.textContent = '·';
+    detail.append(separator, ` ${statusText(session.state)}`);
     button.append(title, context, detail);
     button.onclick = () => selectSession(session);
     return button;
   });
   $('sessions').replaceChildren(...nodes);
   $('list-empty').hidden = sessions.length !== 0;
+  fitProjectPaths();
 }
 
 function awaitingConfirmation(state = {}) {
@@ -370,7 +412,25 @@ async function refreshSnapshot() {
 
 function renderHeader() {
   $('session-name').textContent = selected?.name || 'Choose a session';
-  $('session-context').textContent = selected ? `${selected.projectRoot || 'No project'}${selected.branch ? ` · ${selected.branch}` : ''}` : 'Your live workspace';
+  const context = $('session-context');
+  headerPath = null;
+  if (!selected) {
+    context.textContent = 'Your live workspace';
+    context.title = '';
+    return;
+  }
+  const path = document.createElement('span');
+  path.className = 'context-path';
+  path.textContent = selected.projectRoot || 'No project';
+  context.title = `${path.textContent}${selected.branch ? ` · ${selected.branch}` : ''}`;
+  const branch = selected.branch ? document.createElement('span') : null;
+  if (branch) {
+    branch.className = 'context-branch';
+    branch.textContent = selected.branch;
+  }
+  context.replaceChildren(path, ...(branch ? [' ', branch] : []));
+  headerPath = { container: context, node: path, fullPath: path.textContent, branch };
+  fitProjectPaths();
 }
 
 function renderTranscript() {
@@ -523,4 +583,4 @@ $('older').onclick = async () => {
 api('/api/auth').then(auth => {
   if (auth.authenticated) { csrfToken = auth.csrfToken; start(); }
   else showLogin();
-}).catch(error => { showLogin(); $('login-error').textContent = `Cannot reach Paj Remote: ${error.message}`; });
+}).catch(error => { showLogin(); $('login-error').textContent = `Cannot reach paj-rc: ${error.message}`; });

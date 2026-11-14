@@ -13,6 +13,7 @@ const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/state.js', ['state.js', 'text/javascript; charset=utf-8']],
+  ['/paths.js', ['paths.js', 'text/javascript; charset=utf-8']],
   ['/markdown.js', ['markdown.js', 'text/javascript; charset=utf-8']],
   ['/images.js', ['images.js', 'text/javascript; charset=utf-8']],
   ['/image-limits.js', ['image-limits.js', 'text/javascript; charset=utf-8']],

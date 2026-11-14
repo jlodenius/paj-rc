@@ -24,7 +24,8 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   const root = await mkdtemp(join(tmpdir(), 'paj-rc-browser-'));
   const paths = { runtimeDir: root, socketPath: join(root, 'daemon.sock') };
   const identity = { id: randomUUID(), piSessionId: randomUUID(), pid: process.pid,
-    name: 'Backend', projectRoot: '/projects/backend', role: 'primary', parentPiSessionId: null };
+    name: 'Backend', projectRoot: '/home/jacob/Development/work/client-projects/backend',
+    branch: 'feature/mobile-layout', role: 'primary', parentPiSessionId: null };
   const config = { port: 0, allowedOrigins: [], idleTimeoutMs: 60000,
     pairingKey: randomBytes(32).toString('base64url') };
   const state = { busy: false, runId: null, editorBusy: false, terminalRequired: false, supportsImages: true };
@@ -159,6 +160,43 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   await evaluate('document.fonts.ready');
   assert.equal(await evaluate('document.fonts.check(\'14px "Fira Code"\')'), true);
   assert.equal(await evaluate('document.fonts.check(\'24px "Space Grotesk"\')'), true);
+  assert.equal(await evaluate('document.title'), 'paj-rc');
+  assert.equal(await evaluate('document.querySelector(".sidebar-header .brand").textContent'), '# paj-rc');
+  for (const [scheme, colour] of [['light', 'rgb(230, 230, 230)'], ['dark', 'rgb(56, 56, 56)']]) {
+    await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
+    const divider = await evaluate(`(() => {
+      const card = document.querySelector('.session-card');
+      const next = card.cloneNode(true);
+      card.after(next);
+      const style = getComputedStyle(card);
+      const result = { width: style.borderBottomWidth, colour: style.borderBottomColor,
+        gap: style.gap, spacing: style.marginBottom, lastColour: getComputedStyle(next).borderBottomColor };
+      next.remove();
+      return result;
+    })()`);
+    assert.deepEqual(divider, { width: '1px', colour, gap: '8px', spacing: '10px', lastColour: 'rgba(0, 0, 0, 0)' });
+  }
+  await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
+  assert.equal(await evaluate('getComputedStyle(document.querySelector("#refresh")).color'), 'rgb(239, 83, 80)');
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".session-separator")).color'), 'rgb(239, 83, 80)');
+  const pathCandidates = [identity.projectRoot, ...identity.projectRoot.split('/').filter(Boolean)
+    .map((_, index, parts) => `../${parts.slice(index + 1).join('/')}`).slice(0, -1)];
+  for (const width of [320, 390, 768]) {
+    await call('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: true });
+    await delay(80);
+    const layout = await evaluate(`(() => {
+      const context = document.querySelector('#session-context');
+      const branch = context.querySelector('.context-branch');
+      return { path: context.querySelector('.context-path').textContent, branch: branch.textContent,
+        fits: context.scrollWidth <= context.clientWidth + 1,
+        clipped: getComputedStyle(context).textOverflow === 'ellipsis' };
+    })()`);
+    assert.ok(pathCandidates.includes(layout.path), layout.path);
+    assert.equal(layout.branch, identity.branch);
+    assert.equal(layout.fits, true);
+    assert.equal(layout.clipped, false);
+  }
+  await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   assert.equal(await evaluate('document.querySelector("#working-indicator").hidden'), true);
   await evaluate(`(() => {
     const input = document.querySelector('#prompt');

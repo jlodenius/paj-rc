@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const origin = 'https://remote.example';
 const shell = [
-  '/', '/app.js', '/state.js', '/markdown.js', '/images.js', '/image-limits.js',
+  '/', '/app.js', '/state.js', '/paths.js', '/markdown.js', '/images.js', '/image-limits.js',
   '/style.css', '/manifest.webmanifest',
   '/fonts/fira-code-latin.woff2', '/fonts/space-grotesk-latin.woff2',
   '/fonts/firacode-OFL.txt', '/fonts/spacegrotesk-OFL.txt',
@@ -164,7 +164,7 @@ test('registration requires a secure context and service worker support', async 
 
 test('manifest and HTML expose native installation metadata and steering defaults', async () => {
   const manifest = JSON.parse(await readFile(new URL('../public/manifest.webmanifest', import.meta.url)));
-  assert.equal(manifest.name, 'Paj Remote');
+  assert.equal(manifest.name, 'paj-rc');
   assert.equal(manifest.id, '/');
   assert.equal(manifest.start_url, '/');
   assert.equal(manifest.scope, '/');

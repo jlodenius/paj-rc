@@ -12,7 +12,11 @@ class Element {
     this.clientHeight = 500;
     this.classList = { add() {}, remove() {}, toggle() {} };
   }
-  replaceChildren(...children) { this.children = children; }
+  get textContent() {
+    return (this.text || '') + this.children.map(child => typeof child === 'string' ? child : child.textContent || '').join('');
+  }
+  set textContent(text) { this.text = text; this.children = []; }
+  replaceChildren(...children) { this.text = ''; this.children = children; }
   append(...children) { this.children.push(...children); }
   prepend(...children) { this.children.unshift(...children); }
   setAttribute() {}
