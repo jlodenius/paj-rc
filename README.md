@@ -54,13 +54,7 @@ paj-rc key
 Open <http://127.0.0.1:43187> and enter the key. Pair only trusted browsers: they can control Pi
 and its tools. Treat the key like a password. Your browser remembers its pairing.
 
-Use **+ photo** or **camera** to attach up to three photos, with or without text. Photos are resized
-before sending and require an image-capable model in Pi.
-
-The service starts with your first main Pi session and stops 30 seconds after the last closes.
-Closing the browser does not stop agent work. Rerun setup after upgrades change executable paths.
-
-## Phone access
+## Remote access with Tailscale
 
 Install Tailscale on your computer and phone, and sign in to the same tailnet. Check existing
 routes before configuring private HTTPS access; do not replace another application's route or use
