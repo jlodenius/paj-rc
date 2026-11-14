@@ -1,7 +1,7 @@
 # paj-rc
 
-`paj-rc` provides private browser access to your running main
-[Pi](https://github.com/badlogic/pi-mono) sessions through [Paj](https://github.com/jlodenius/paj).
+`paj-rc` lets you remotely control your running main [Pi](https://github.com/badlogic/pi-mono)
+sessions from your phone or browser through [Paj](https://github.com/jlodenius/paj).
 
 ## Install
 
