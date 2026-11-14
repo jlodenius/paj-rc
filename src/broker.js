@@ -14,9 +14,11 @@ export class RemoteError extends Error {
 function state(value) {
   if (!value || typeof value.busy !== 'boolean' || typeof value.editorBusy !== 'boolean' ||
       typeof value.terminalRequired !== 'boolean' ||
+      (value.supportsImages !== undefined && typeof value.supportsImages !== 'boolean') ||
       !(value.runId === null || typeof value.runId === 'string')) throw new Error('Invalid session state');
   return { busy: value.busy, editorBusy: value.editorBusy, terminalRequired: value.terminalRequired,
-    runId: value.runId };
+    runId: value.runId,
+    ...(typeof value.supportsImages === 'boolean' ? { supportsImages: value.supportsImages } : {}) };
 }
 
 async function removeStale(path) {

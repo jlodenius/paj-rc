@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { once } from 'node:events';
 import { startDaemon } from '../src/daemon.js';
@@ -44,6 +45,11 @@ async function endpoint(t, path, identity, options = {}) {
       if (frame.type === 'registered') socket.emit('registered');
       if (frame.type === 'request') {
         options.onRequest?.(frame);
+        if (frame.method === 'prompt' && frame.params.images?.length && options.supportsImages === false) {
+          socket.write(JSON.stringify({ type: 'response', id: frame.id, ok: false,
+            error: { code: 'images_unsupported', message: 'The selected Pi model does not support images' } }) + '\n');
+          continue;
+        }
         socket.write(JSON.stringify({ type: 'response', id: frame.id, ok: true,
           result: frame.method === 'snapshot' ? { sessionId: identity.piSessionId,
             generation: options.generation ?? 'generation-1', seq: 0,
@@ -55,7 +61,8 @@ async function endpoint(t, path, identity, options = {}) {
   });
   socket.write(JSON.stringify({ type: 'register', protocol: 1, identity,
     generation: options.generation ?? 'generation-1',
-    state: { busy: false, runId: null, editorBusy: false, terminalRequired: false } }) + '\n');
+    state: { busy: false, runId: null, editorBusy: false, terminalRequired: false,
+      ...(options.supportsImages === undefined ? {} : { supportsImages: options.supportsImages }) } }) + '\n');
   return socket;
 }
 
@@ -69,12 +76,69 @@ test('browser must pair before accessing sessions and use CSRF protection for wr
   assert.match(login.headers.get('set-cookie'), /HttpOnly/);
   assert.match(login.headers.get('set-cookie'), /SameSite=Strict/);
   const { csrfToken } = await login.json();
-  assert.equal((await request('/api/sessions', { headers: { Cookie: cookie } })).status, 200);
+  const remembered = await request('/api/sessions', { headers: { Cookie: cookie } });
+  assert.equal(remembered.status, 200);
+  assert.match(remembered.headers.get('set-cookie'), /Max-Age=34560000/);
   assert.equal((await request('/api/logout', { method: 'POST', headers: { Cookie: cookie } })).status, 403);
   const logout = await request('/api/logout', { method: 'POST', headers: {
     Cookie: cookie, 'X-CSRF-Token': csrfToken } });
   assert.equal(logout.status, 200);
   assert.equal((await request('/api/sessions', { headers: { Cookie: cookie } })).status, 401);
+});
+
+test('image attachments require an explicitly capable adapter and forward only normalized payloads', async t => {
+  const identity = { id: randomUUID(), piSessionId: randomUUID(), pid: process.pid,
+    name: 'Images', role: 'primary', parentPiSessionId: null };
+  const { daemon, config, request } = await fixture(t, { listSessions: async () => [identity] });
+  const frames = [];
+  const socket = await endpoint(t, daemon.socketPath, identity,
+    { supportsImages: true, onRequest: frame => frames.push(frame) });
+  await once(socket, 'registered');
+  const headers = await pair(request, config.pairingKey);
+  const image = { mimeType: 'image/png', data: readFileSync(
+    new URL('../public/icons/icon-192.png', import.meta.url)).toString('base64') };
+  const input = { generation: 'generation-1', requestId: randomUUID(), text: '', deliverAs: 'steer',
+    images: [{ ...image, url: 'not-forwarded' }] };
+  const path = `/api/sessions/${identity.id}/prompt`;
+  const send = (body, overrides = {}) => request(path, { method: 'POST', headers,
+    body: JSON.stringify(body), ...overrides });
+  assert.equal((await send(input)).status, 200);
+  assert.deepEqual(frames.at(-1).params, { ...input, images: [image] });
+  assert.equal((await send({ ...input, padding: 'x'.repeat(200 * 1024) })).status, 200);
+  assert.equal((await send({ ...input, padding: 'x'.repeat(1536 * 1024) })).status, 413);
+  assert.equal((await send({ ...input, images: [{ ...image, data: 'bad' }] })).status, 400);
+  assert.equal((await send({ ...input, images: [], text: '' })).status, 400);
+  assert.equal((await send({ ...input, images: [], text: 'x'.repeat(16001) })).status, 400);
+  assert.equal((await send({ ...input, padding: 'x'.repeat(1536 * 1024) },
+    { headers: { Origin: daemon.address, 'Content-Type': 'application/json' } })).status, 401);
+  assert.equal((await send({ ...input, padding: 'x'.repeat(1536 * 1024) },
+    { headers: { ...headers, 'X-CSRF-Token': 'wrong' } })).status, 403);
+  assert.equal((await request(`/api/sessions/${identity.id}/abort`, { method: 'POST', headers,
+    body: JSON.stringify({ generation: 'generation-1', runId: 'run', padding: 'x'.repeat(129 * 1024) }) })).status, 413);
+  assert.equal((await request('/api/login', { method: 'POST', headers,
+    body: JSON.stringify({ key: config.pairingKey, padding: 'x'.repeat(129 * 1024) }) })).status, 413);
+});
+
+test('image prompts fail closed for older adapters and models without image support', async t => {
+  for (const supportsImages of [undefined, false]) {
+    const identity = { id: randomUUID(), piSessionId: randomUUID(), pid: process.pid,
+      name: 'No images', role: 'primary', parentPiSessionId: null };
+    const { daemon, config, request } = await fixture(t, { listSessions: async () => [identity] });
+    const frames = [];
+    const socket = await endpoint(t, daemon.socketPath, identity,
+      { supportsImages, onRequest: frame => frames.push(frame) });
+    await once(socket, 'registered');
+    const headers = await pair(request, config.pairingKey);
+    const response = await request(`/api/sessions/${identity.id}/prompt`, { method: 'POST', headers,
+      body: JSON.stringify({ generation: 'generation-1', requestId: randomUUID(), text: '', deliverAs: 'steer',
+        images: [{ mimeType: 'image/png', data: readFileSync(
+          new URL('../public/icons/icon-192.png', import.meta.url)).toString('base64') }] }) });
+    assert.equal(response.status, 409);
+    const data = await response.json();
+    assert.equal(data.error.code, 'images_unsupported');
+    assert.match(data.error.message, supportsImages === false ? /model does not support/ : /Reload the Pi extension/);
+    assert.equal(frames.length, supportsImages === false ? 1 : 0);
+  }
 });
 
 test('idle service closes itself rather than leaving an unavailable listener running', async t => {

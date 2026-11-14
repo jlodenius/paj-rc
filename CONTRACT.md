@@ -57,9 +57,12 @@ Daemon validates registration against `paj --json session list --all` before ack
 ```
 
 Prompt `deliverAs` is `reject`, `steer`, or `followUp`. Adapter enforces editor exclusion and
-explicit busy behavior; return submitted, not guaranteed acceptance. Deduplicate prompt request IDs
-at target adapter. Browser disconnect must not abort work. Heartbeat every 5s; daemon closes an
-endpoint after 20s silence. No child endpoint is accepted; registry disappearance removes access.
+explicit busy behavior; return submitted, not guaranteed acceptance. Explicit steering/follow-up
+messages may share one reservation while the same identified run is active. Idle or uncertain
+preflight submissions remain exclusive until a real run starts; reservation reuse must revalidate
+ownership. Deduplicate prompt request IDs at the target adapter. Browser disconnect must not abort
+work. Heartbeat every 5s; daemon closes an endpoint after 20s silence. Child endpoints are rejected;
+registry disappearance removes access.
 RPC timeout is 10s; no automatic retry of writes. Snapshot uses bounded latest 100 messages, with
 `before` optional pagination cursor and `hasMore`. A snapshot result has this shape:
 
@@ -68,16 +71,55 @@ RPC timeout is 10s; no automatic retry of writes. Snapshot uses bounded latest 1
 ```
 
 Snapshot messages may include one current partial assistant message. Tool messages use role `tool`.
+Visible Paj custom messages retain `role: "assistant"` with optional `customType: "paj-messages"`
+for purple-panel Markdown rendering. The marker is included in snapshots and live final messages;
+custom message details and arbitrary custom types are not transmitted. All HTML stays literal,
+transcript image payloads are omitted, and explicit links allow only HTTP(S). User image messages
+carry a bounded `imageCount` and image-only placeholders. Other messages remain plain text.
 Never include system prompts, hidden custom messages, thinking, or unbounded payloads.
+
+## Photo input
+
+Prompt requests may include `images: [{ mimeType, data }]`, with canonical base64, no data URLs.
+Limits are three images, 512 KiB per image, 1 MiB combined decoded bytes, 2048 pixels per side, and
+4 MiPixels. JPEG, PNG, and nonanimated WebP headers/structure are checked at both HTTP and adapter
+boundaries. Prompt HTTP bodies are capped at 1536 KiB; other bodies remain capped at 128 KiB, and
+IPC frames remain capped at 2 MiB. Image-only messages may have empty text.
+
+The session-list response advertises `imageUploads: true`; the browser requires this marker so an
+older daemon cannot silently discard photos. Browser photos also use the dedicated `image-prompt`
+HTTP route so a service downgrade fails rather than treating them as text-only input. The optional
+state boolean `supportsImages` advertises adapter support and current model capability. HTTP rejects
+photos when this capability is absent. Compatible adapters resolve duplicates before checking their
+current model, so a replay remains idempotent after model changes. New unsupported image requests
+are rejected before SDK dispatch. Native text/image content arrays carry accepted submissions;
+deduplication hashes image content rather than retaining image bytes.
+
+The browser prepares JPEGs with a maximum 1600-pixel long side and a per-photo budget of one third
+of the total limit. Canvas encoding strips original metadata. HEIC/HEIF require native browser
+decoding support. Draft previews use short-lived blob URLs, revoked on removal, logout, session
+change, or successful submission. Drafts stay in memory, never cached or queued offline.
+No upload files are written by paj-rc; Pi and its model provider handle images as normal user input.
+Transcript snapshots/events contain only image counts/placeholders, never image bytes or URLs.
 
 ## Browser authentication
 
 Pairing uses the owner-private configured key. Browser cookies contain canonical random opaque
 256-bit tokens, not the pairing key. Their hashes and CSRF values are stored atomically beside
 configuration in mode-0600 `browser-sessions.json`, bound to the current pairing-key fingerprint.
-Sessions expire after seven days. Logout deletes the durable record before reporting success;
-key rotation invalidates prior records. Cookies are HttpOnly and SameSite=Strict, with Secure set
-for configured HTTPS origins. A direct local process owned by the same user remains trusted.
+Remembered credentials have no server expiry (`expires: null`, store version 2). Active version-1
+credentials migrate without changing their tokens; expired records do not migrate. The browser
+cookie has a 400-day lifetime, renewed on authenticated requests. Logout durably removes the
+record before reporting success; key rotation invalidates prior records. Cookies are HttpOnly and
+SameSite=Strict, with Secure set for HTTPS. Same-user local processes remain trusted.
+
+## Installable app shell
+
+A same-origin manifest, service worker, and PNG icons enable standalone home-screen installation.
+Only explicit public shell paths can be cached, using credential-free requests. APIs, history,
+authentication, SSE, and writes bypass the worker; offline writes are never queued or retried.
+The worker can serve cached public assets on network or temporary server failure, not permission
+failure. Private responses remain `no-store`. New composer sessions select steering by default.
 
 ## Browser HTTP
 
@@ -89,9 +131,10 @@ and CSRF token for authenticated writes. UI assets only same-origin, no remote d
 - `POST /api/login` with `{ key }`: sets cookie and returns `{ csrfToken }`.
 - `POST /api/logout` with `X-CSRF-Token`: clears cookie.
 - `GET /api/sessions`: `{ sessions: [{ id, piSessionId, generation, name, projectRoot, branch,
-  state }] }`. `id` is Paj registration ID and is the route key.
+  state }], imageUploads: true }`. `id` is Paj registration ID and is the route key.
 - `GET /api/sessions/:id/snapshot?before=...`: snapshot result above.
 - `POST /api/sessions/:id/prompt`: `{ generation, requestId, text, deliverAs }`.
+- `POST /api/sessions/:id/image-prompt`: `{ generation, requestId, text, deliverAs, images }`.
 - `POST /api/sessions/:id/abort`: `{ generation, runId }`.
 - `GET /api/events`: authenticated SSE. Named events `sessions` (refetch list), `session`
   (`{ id, generation, seq, event }`), `resync` (refetch list and selected snapshot).

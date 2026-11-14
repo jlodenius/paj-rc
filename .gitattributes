@@ -1,0 +1,2 @@
+# Preserve bundled font licenses exactly as distributed upstream.
+public/fonts/*-OFL.txt -whitespace

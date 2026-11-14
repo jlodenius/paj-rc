@@ -10,5 +10,6 @@
   "files": ["extensions", "src", "public", "README.md"],
   "keywords": ["pi-package", "paj", "remote-control"],
   "peerDependencies": { "@earendil-works/pi-coding-agent": "*" },
+  "peerDependenciesMeta": { "@earendil-works/pi-coding-agent": { "optional": true } },
   "pi": { "extensions": ["extensions/index.ts"] }
 }

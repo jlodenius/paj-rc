@@ -6,6 +6,7 @@ class Element {
     this.value = '';
     this.children = [];
     this.disabled = false;
+    this.style = {};
     this.scrollHeight = 500;
     this.scrollTop = 0;
     this.clientHeight = 500;
@@ -13,6 +14,7 @@ class Element {
   }
   replaceChildren(...children) { this.children = children; }
   append(...children) { this.children.push(...children); }
+  prepend(...children) { this.children.unshift(...children); }
   setAttribute() {}
   focus() {}
 }
@@ -24,9 +26,10 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
   const requests = [];
   let source;
   let resolveSnapshot;
+  let imageUploads = true;
   const session = {
     id: 'paj-id', name: 'Test main', generation: 'generation', projectRoot: '/project', branch: 'main',
-    state: { busy: true, runId: 'run' },
+    state: { busy: true, runId: 'run', supportsImages: true },
   };
   const other = { ...session, id: 'other-id', name: 'Other main', generation: 'other-generation',
     state: { busy: true, runId: 'other-run' } };
@@ -35,7 +38,11 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
       if (!elements.has(id)) elements.set(id, new Element());
       return elements.get(id);
     },
-    createElement() { return new Element(); },
+    createElement() {
+      const element = new Element();
+      Object.defineProperty(element, 'id', { set(id) { elements.set(id, element); } });
+      return element;
+    },
   };
   globalThis.EventSource = class {
     constructor(url) { this.url = url; this.listeners = {}; source = this; }
@@ -46,7 +53,7 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
     requests.push({ url, options });
     let data;
     if (url === '/api/auth') data = { authenticated: true, csrfToken: 'csrf-secret' };
-    else if (url === '/api/sessions') data = { sessions: [session, other] };
+    else if (url === '/api/sessions') data = { sessions: [session, other], imageUploads };
     else if (url.endsWith('/snapshot')) {
       assert.equal(source.url, '/api/events');
       data = await new Promise(resolve => { resolveSnapshot = resolve; });
@@ -67,8 +74,20 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
         busy: false, runId: null, editorBusy: false, terminalRequired: false,
       } } }) });
     assert.match(elements.get('sessions').children[1].children[2].textContent, /Ready/);
+    source.onerror();
+    await settle();
+    assert.match(elements.get('notice').textContent, /Connection interrupted/);
+    source.onopen();
+    await settle();
+    assert.equal(elements.get('notice').hidden, true);
     elements.get('sessions').children[0].onclick();
     await settle();
+    elements.get('prompt').value = 'Draft while synchronizing';
+    elements.get('prompt').oninput();
+    assert.equal(elements.get('prompt').disabled, false);
+    assert.equal(elements.get('send').disabled, true);
+    await elements.get('composer').onsubmit({ preventDefault() {} });
+    assert.equal(requests.filter(request => request.url.endsWith('/prompt')).length, 0);
     source.listeners.session({ data: JSON.stringify({
       id: 'paj-id', generation: 'generation', seq: 5,
       event: { type: 'delta', messageId: 'partial', text: ' world' },
@@ -79,6 +98,21 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
     });
     await settle();
     assert.equal(elements.get('messages').children[0].children[1].textContent, 'Hello world');
+    assert.equal(elements.get('composer-hint').textContent, '');
+    assert.equal(elements.get('composer-hint').hidden, true);
+    assert.equal(document.getElementById('working-indicator').hidden, false);
+    source.onerror();
+    assert.equal(document.getElementById('working-indicator').hidden, true);
+    await settle();
+    assert.match(elements.get('notice').textContent, /Connection interrupted/);
+    source.onopen();
+    await settle();
+    assert.match(elements.get('notice').textContent, /Connection interrupted/);
+    resolveSnapshot({ generation: 'generation', seq: 5, state: session.state,
+      messages: [{ id: 'partial', role: 'assistant', text: 'Hello world' }], hasMore: false });
+    await settle();
+    assert.equal(elements.get('notice').hidden, true);
+    assert.equal(elements.get('notice').textContent, '');
     elements.get('prompt').value = 'An instruction';
     document.getElementById('deliver-as').value = 'steer';
     elements.get('prompt').oninput();
@@ -113,10 +147,11 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
     await settle();
     assert.equal(elements.get('messages').children[0].children[1].textContent, 'Resynchronized');
     assert.equal(elements.get('stop').disabled, true);
-    assert.equal(elements.get('session-status').textContent, 'Awaiting Pi confirmation');
+    assert.match(elements.get('composer-hint').textContent, /Awaiting Pi confirmation/);
+    assert.equal(elements.get('working-indicator').hidden, true);
     assert.equal(elements.get('send').disabled, true);
     assert.equal(elements.get('prompt').disabled, false);
-    assert.match(elements.get('composer-hint').textContent, /Submitted does not mean accepted/);
+    assert.doesNotMatch(elements.get('composer-hint').textContent, /Submitted does not mean/);
     assert.match(elements.get('composer-hint').textContent, /check the terminal.*restart that Pi process/);
     await elements.get('composer').onsubmit({ preventDefault() {} });
     assert.equal(requests.filter(request => request.url.endsWith('/prompt')).length, 1);
@@ -130,15 +165,55 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
         busy: true, runId: 'confirmed-run', editorBusy: false, terminalRequired: false,
       } },
     }) });
-    assert.equal(elements.get('session-status').textContent, 'Working');
+    assert.equal(elements.get('working-indicator').hidden, false);
     assert.equal(elements.get('send').disabled, false);
     assert.equal(elements.get('stop').disabled, false);
+    elements.get('prompt').value = 'Another instruction';
+    elements.get('prompt').oninput();
+    await elements.get('composer').onsubmit({ preventDefault() {} });
+    assert.match(elements.get('notice').textContent, /Delivery is uncertain/);
     source.onerror();
     await settle();
     assert.equal(elements.get('send').disabled, true);
     assert.match(elements.get('notice').textContent, /Work continues/);
-    assert.equal(requests.filter(request => request.url.endsWith('/prompt')).length, 1);
+    assert.equal(requests.filter(request => request.url.endsWith('/prompt')).length, 2);
     assert.equal(requests.filter(request => request.url.endsWith('/abort')).length, 1);
+    assert.match(elements.get('notice').textContent, /Delivery is uncertain/);
+    source.onopen();
+    await settle();
+    assert.match(elements.get('notice').textContent, /Connection interrupted/);
+    resolveSnapshot({ generation: 'generation', seq: 8,
+      state: { busy: true, runId: 'confirmed-run', editorBusy: false, terminalRequired: false },
+      messages: [{ id: 'older-user', role: 'user', text: 'Earlier instruction' },
+        { id: 'earlier', role: 'assistant', text: 'Earlier response' },
+        { id: 'user', role: 'user', text: 'Latest instruction' },
+        { id: 'partial', role: 'assistant', text: 'Recovered' }], hasMore: false });
+    await settle();
+    assert.doesNotMatch(elements.get('notice').textContent, /Connection interrupted/);
+    assert.match(elements.get('notice').textContent, /Delivery is uncertain/);
+    assert.equal(elements.get('notice').hidden, false);
+    assert.equal(elements.get('working-indicator').hidden, false);
+    assert.equal(elements.get('composer').children[0], elements.get('working-indicator'));
+    assert.equal(elements.get('messages').children.includes(elements.get('working-indicator')), false);
+    for (const [index, state] of [
+      { busy: false, runId: null },
+      { busy: true, runId: 'run', editorBusy: true },
+      { busy: true, runId: 'run', terminalRequired: true },
+    ].entries()) {
+      source.listeners.session({ data: JSON.stringify({ id: 'paj-id', generation: 'generation',
+        seq: 9 + index, event: { type: 'state', state } }) });
+      assert.equal(elements.get('working-indicator').hidden, true);
+      assert.equal(elements.get('prompt').disabled, false);
+    }
+    source.listeners.session({ data: JSON.stringify({ id: 'paj-id', generation: 'generation',
+      seq: 12, event: { type: 'state', state: { busy: false, runId: null,
+        editorBusy: false, terminalRequired: false, supportsImages: true } } }) });
+    assert.equal(elements.get('attach-photo').disabled, false);
+    imageUploads = false;
+    source.listeners.sessions();
+    await settle();
+    assert.equal(elements.get('attach-photo').disabled, true);
+    assert.match(elements.get('photo-status').textContent, /Update the service/);
   } finally {
     for (const [key, value] of Object.entries(globals)) {
       if (value === undefined) delete globalThis[key];

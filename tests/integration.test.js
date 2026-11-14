@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -27,7 +27,8 @@ function liveSession(name) {
   let idle = true;
   let stopped = 0;
   const reservations = new Set();
-  const ctx = { mode: 'tui', hasUI: true, isIdle: () => idle, abort: () => { stopped++; },
+  const ctx = { mode: 'tui', hasUI: true, model: { input: ['text', 'image'] },
+    isIdle: () => idle, abort: () => { stopped++; },
     sessionManager: { getSessionId: () => identity.piSessionId, getBranch: () => entries } };
   const submitted = [];
   const pi = { on(event, callback) {
@@ -37,9 +38,14 @@ function liveSession(name) {
     return () => listeners.delete(callback);
   }, sendUserMessage(text, options) { submitted.push({ text, options }); } };
   const paj = { version: 1, getSnapshot: () => ({ identity, editorBusy: false }),
-    tryReserve: token => { reservations.add(token); return true; }, release: token => reservations.delete(token) };
+    tryReserve: token => {
+      if (reservations.has(token)) return true;
+      if (reservations.size) return false;
+      reservations.add(token); return true;
+    }, release: token => reservations.delete(token) };
   const adapter = createSessionAdapter({ pi, ctx, paj, env: {} });
   return { identity, adapter, submitted, get stopped() { return stopped; },
+    setModel(input) { ctx.model = { input }; this.emit('model_select'); },
     emit(event, data = {}) {
       if (event === 'agent_start') idle = false;
       if (event === 'agent_settled') idle = true;
@@ -104,6 +110,41 @@ test('two live adapters expose separate chats, keep work alive on browser loss, 
   assert.equal(resumed.messages.at(-1).text, 'Still working');
   assert.equal(resumed.state.busy, true);
   assert.equal(first.submitted.length, 1);
+  for (const text of ['First steering instruction', 'Second steering instruction']) {
+    const response = await fetch(`${daemon.address}${route}/prompt`, { method: 'POST', headers,
+      body: JSON.stringify({ generation: resumed.generation, requestId: randomUUID(),
+        text, deliverAs: 'steer' }) });
+    assert.equal(response.status, 200);
+  }
+  assert.deepEqual(first.submitted.slice(1).map(input => input.text),
+    ['First steering instruction', 'Second steering instruction']);
+  assert.equal(second.submitted.length, 0);
+  const image = { mimeType: 'image/png', data: (await readFile(
+    new URL('../public/icons/icon-192.png', import.meta.url))).toString('base64') };
+  const photoInput = { generation: resumed.generation, requestId: randomUUID(),
+    text: '', images: [image], deliverAs: 'steer' };
+  const photo = await fetch(`${daemon.address}${route}/image-prompt`, { method: 'POST', headers,
+    body: JSON.stringify(photoInput) });
+  assert.equal(photo.status, 200);
+  assert.deepEqual(first.submitted.at(-1).text, [{ type: 'image', ...image }]);
+  first.emit('message_end', { message: { role: 'user', content: [{ type: 'image', ...image }] } });
+  const photoHistory = await (await fetch(`${daemon.address}${route}/snapshot`, { headers })).json();
+  const sentPhoto = photoHistory.messages.find(message => message.imageCount === 1);
+  assert.ok(sentPhoto);
+  assert.equal(sentPhoto.text, '[Image attached]');
+  assert.equal(JSON.stringify(photoHistory).includes(image.data), false);
+  first.setModel(['text']);
+  await until(async () => (await sessions()).sessions.find(session => session.id === first.identity.id)
+    ?.state.supportsImages === false);
+  const replay = await fetch(`${daemon.address}${route}/image-prompt`, { method: 'POST', headers,
+    body: JSON.stringify(photoInput) });
+  assert.equal(replay.status, 200);
+  assert.equal((await replay.json()).duplicate, true);
+  assert.equal(first.submitted.length, 4);
+  const unsupported = await fetch(`${daemon.address}${route}/image-prompt`, { method: 'POST', headers,
+    body: JSON.stringify({ ...photoInput, requestId: randomUUID() }) });
+  assert.equal(unsupported.status, 409);
+  assert.equal(first.submitted.length, 4);
   const stale = await fetch(`${daemon.address}${route}/abort`, { method: 'POST', headers,
     body: JSON.stringify({ generation: snapshot.generation, runId: 'old-run' }) });
   assert.equal(stale.status, 409);

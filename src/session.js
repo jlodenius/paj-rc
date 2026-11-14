@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { validateImages, hashImages } from './images.js';
 
 const TEXT_LIMIT = 8192;
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
@@ -41,10 +42,16 @@ export function projectMessage(message, id) {
       !(message.role === 'custom' && message.display === true))) return null;
   const role = message.role === 'toolResult' ? 'tool'
     : message.role === 'custom' ? 'assistant' : message.role;
+  const imageCount = message.role === 'user' && Array.isArray(message.content)
+    ? Math.min(3, message.content.filter(part => part?.type === 'image').length) : 0;
   const text = role === 'tool'
     ? `${String(message.toolName ?? 'Tool').slice(0, 100)}: ${message.isError ? 'failed' : 'completed'}`
-    : textContent(message.content);
-  return text ? { id, role, text } : null;
+    : textContent(message.content) || (imageCount === 1 ? '[Image attached]'
+      : imageCount ? `[${imageCount} images attached]` : '');
+  return text ? { id, role, text,
+    ...(imageCount ? { imageCount } : {}),
+    ...(message.role === 'custom' && message.customType === 'paj-messages'
+      ? { customType: 'paj-messages' } : {}) } : null;
 }
 
 export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = process.pid,
@@ -57,8 +64,10 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
   const leases = new Set();
   const unsubscribers = [];
   let closed = false;
+  let modelCtx = ctx;
   let seq = 0;
   let runId = ctx.isIdle() ? null : uuid();
+  let leaseRunId = null;
   let terminalDepth = 0;
   let partial = null;
   let finalized = [];
@@ -74,7 +83,8 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
   };
   const state = () => ({ busy: !ctx.isIdle() || leases.size > 0,
     runId, editorBusy: Boolean(paj.getSnapshot().editorBusy),
-    terminalRequired: terminalDepth > 0 });
+    terminalRequired: terminalDepth > 0,
+    supportsImages: Array.isArray(modelCtx.model?.input) && modelCtx.model.input.includes('image') });
   const emit = (event) => {
     if (!eligible()) return;
     const frame = { type: 'event', seq: ++seq, event };
@@ -135,11 +145,12 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
   const releaseLeases = () => {
     for (const token of leases) paj.release(token);
     leases.clear();
+    leaseRunId = null;
   };
   const on = (name, handler) => {
     const unsubscribe = pi.on(name, (event, currentCtx) => {
       if (!eligible() || currentCtx?.sessionManager.getSessionId() !== sessionId) return;
-      handler(event);
+      handler(event, currentCtx);
     });
     if (typeof unsubscribe === 'function') unsubscribers.push(unsubscribe);
   };
@@ -158,6 +169,10 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     runId = null;
     emit({ type: 'state', state: state() });
     emit({ type: 'reset' });
+  });
+  on('model_select', (event, currentCtx) => {
+    modelCtx = currentCtx;
+    emit({ type: 'state', state: state() });
   });
   on('ui_prompt_start', () => {
     terminalDepth++;
@@ -257,37 +272,57 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     prompt(params) {
       validateTarget(params);
       const { requestId, text, deliverAs } = params;
+      const images = validateImages(params.images);
+      const imageHash = hashImages(images);
       if (typeof requestId !== 'string' || !/^[\w-]{1,128}$/.test(requestId) ||
-          typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > 65536 ||
+          typeof text !== 'string' || (!text.trim() && !images.length) || Buffer.byteLength(text) > 65536 ||
           !['reject', 'steer', 'followUp'].includes(deliverAs)) {
         fail('invalid_request', 'A bounded text, request ID and explicit delivery choice are required');
       }
       const previous = dedup.get(requestId);
       if (previous) {
-        if (previous.text !== text || previous.deliverAs !== deliverAs) {
+        if (previous.text !== text || previous.deliverAs !== deliverAs || previous.imageHash !== imageHash) {
           fail('request_conflict', 'Request ID was already used for different input');
         }
         if (previous.error) fail(previous.error.code, previous.error.message);
         return { ...previous.result, duplicate: true };
       }
+      if (images.length && !state().supportsImages) {
+        fail('images_unsupported', 'The selected Pi model does not support images');
+      }
       if (paj.getSnapshot().editorBusy) fail('editor_busy', 'An editor request owns this session');
-      if (leases.size > 0) fail('busy', 'A previous submission has not started or settled');
+      const queueDuringRun = !ctx.isIdle() && Boolean(runId) && deliverAs !== 'reject';
+      const reuseLease = leases.size > 0;
+      if (reuseLease && (!queueDuringRun || leaseRunId !== runId)) {
+        fail('busy', 'A previous submission has not started or settled');
+      }
       if (!ctx.isIdle() && deliverAs === 'reject') fail('busy', 'Choose steering or follow-up explicitly');
-      const token = `${generation}:${requestId}`;
+      // Queued input shares its active run's reservation; uncertain idle dispatch stays exclusive.
+      const token = reuseLease ? leases.values().next().value : `${generation}:${requestId}`;
       if (!paj.tryReserve(token)) fail('editor_busy', 'An editor request owns this session');
-      leases.add(token);
-      const record = { text, deliverAs };
+      if (!reuseLease) {
+        leases.add(token);
+        leaseRunId = queueDuringRun ? runId : null;
+      }
+      const record = { text, deliverAs, imageHash };
       dedup.set(requestId, record);
       while (dedup.size > Math.max(1, dedupLimit)) dedup.delete(dedup.keys().next().value);
       try {
-        pi.sendUserMessage(text, { expandPromptTemplates: false,
+        const content = images.length ? [
+          ...(text.trim() ? [{ type: 'text', text }] : []),
+          ...images.map(image => ({ type: 'image', ...image })),
+        ] : text;
+        pi.sendUserMessage(content, { expandPromptTemplates: false,
           ...(deliverAs === 'reject' ? {} : { deliverAs }) });
         record.result = { status: 'submitted', requestId };
         emit({ type: 'state', state: state() });
         return record.result;
       } catch (error) {
-        leases.delete(token);
-        paj.release(token);
+        if (!reuseLease) {
+          leases.delete(token);
+          paj.release(token);
+          leaseRunId = null;
+        }
         record.error = { code: 'submission_failed', message: 'Pi could not submit this input' };
         fail(record.error.code, record.error.message);
       }

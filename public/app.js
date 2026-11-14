@@ -1,6 +1,30 @@
 import { createTranscript, applySnapshot, applyEvent, prependHistory } from './state.js';
+import { renderMarkdown } from './markdown.js';
+import { prepareImage } from './images.js';
+import { MAX_IMAGES } from './image-limits.js';
+
+if (globalThis.isSecureContext && globalThis.navigator?.serviceWorker) {
+  navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' }).catch(() => {});
+}
 
 const $ = id => document.getElementById(id);
+const workingIndicator = document.createElement('div');
+workingIndicator.id = 'working-indicator';
+workingIndicator.className = 'working-indicator';
+workingIndicator.setAttribute('role', 'status');
+workingIndicator.hidden = true;
+const workingSpinner = document.createElement('span');
+workingSpinner.id = 'working-spinner';
+workingSpinner.className = 'working-spinner';
+workingSpinner.setAttribute('aria-hidden', 'true');
+const workingFrames = document.createElement('span');
+workingFrames.className = 'working-spinner-frames';
+workingFrames.textContent = [...'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'].join('\n');
+workingSpinner.append(workingFrames);
+const workingLabel = document.createElement('span');
+workingLabel.textContent = 'Working…';
+workingIndicator.append(workingSpinner, workingLabel);
+$('composer').prepend(workingIndicator);
 let csrfToken;
 let stream;
 let connected = false;
@@ -16,6 +40,106 @@ let sending = false;
 let stopping = false;
 let listVersion = 0;
 let authenticated = false;
+let imageUploads = false;
+let photos = [];
+let preparingPhotos = false;
+let photoError = '';
+let photoRevision = 0;
+let removePhotoButtons = [];
+
+function clearPhotos() {
+  photoRevision++;
+  for (const photo of photos) URL.revokeObjectURL(photo.url);
+  photos = [];
+  preparingPhotos = false;
+  photoError = '';
+  $('photo-library').value = '';
+  $('photo-camera').value = '';
+  renderPhotos();
+}
+
+function renderPhotos() {
+  removePhotoButtons = [];
+  const nodes = photos.map((photo, index) => {
+    const card = document.createElement('div');
+    card.className = 'photo-preview';
+    const image = document.createElement('img');
+    image.src = photo.url;
+    image.alt = `Selected photo ${index + 1}`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'photo-remove';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', `Remove photo ${index + 1}`);
+    remove.onclick = () => {
+      if (sending || preparingPhotos) return;
+      URL.revokeObjectURL(photo.url);
+      photos = photos.filter(value => value !== photo);
+      photoRevision++;
+      photoError = '';
+      renderPhotos();
+      renderControls();
+    };
+    removePhotoButtons.push(remove);
+    card.append(image, remove);
+    return card;
+  });
+  $('photo-previews').replaceChildren(...nodes);
+  $('photo-previews').hidden = photos.length === 0;
+}
+
+async function selectPhotos(event) {
+  const files = Array.from(event.target.files || []);
+  event.target.value = '';
+  if (!files.length || preparingPhotos || sending || !selected || !authenticated) return;
+  if (files.length + photos.length > MAX_IMAGES) {
+    photoError = `Attach up to ${MAX_IMAGES} photos per message.`;
+    renderControls();
+    return;
+  }
+  const revision = ++photoRevision;
+  const version = selectionVersion;
+  preparingPhotos = true;
+  photoError = '';
+  renderControls();
+  try {
+    const prepared = [];
+    for (const file of files) {
+      const image = await prepareImage(file);
+      if (revision !== photoRevision || version !== selectionVersion || !authenticated) return;
+      prepared.push(image);
+    }
+    for (const image of prepared) {
+      photos.push({ mimeType: image.mimeType, data: image.data,
+        url: URL.createObjectURL(image.blob) });
+    }
+    renderPhotos();
+  } catch (error) {
+    if (revision === photoRevision && version === selectionVersion) photoError = error.message;
+  } finally {
+    if (revision === photoRevision) {
+      preparingPhotos = false;
+      renderControls();
+    }
+  }
+}
+
+function renderPhotoControls() {
+  const state = transcript.generation ? transcript.state : selected?.state;
+  const supported = imageUploads && state?.supportsImages === true;
+  const disabled = !authenticated || !selected || !supported || preparingPhotos || sending || photos.length >= MAX_IMAGES;
+  $('attach-photo').disabled = disabled;
+  $('take-photo').disabled = disabled;
+  $('photo-library').disabled = disabled;
+  $('photo-camera').disabled = disabled;
+  for (const button of removePhotoButtons) button.disabled = sending || preparingPhotos;
+  const message = photoError || (preparingPhotos ? 'Preparing photos…'
+    : selected && !supported ? !imageUploads ? 'Update the service to enable photos.'
+      : state?.supportsImages === false ? 'This model does not support photos.' : 'Reload Pi to enable photos.'
+      : photos.length ? `${photos.length}/${MAX_IMAGES} photos attached` : `Up to ${MAX_IMAGES} photos`);
+  if ($('photo-status').textContent !== message) $('photo-status').textContent = message;
+  $('photo-status').setAttribute('data-error', String(Boolean(photoError)));
+}
 
 class ApiError extends Error {
   constructor(message, status) { super(message); this.status = status; }
@@ -30,7 +154,9 @@ async function api(path, body) {
     headers: body === undefined ? {} : { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken || '' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  const data = await response.json();
+  let data;
+  try { data = await response.json(); }
+  catch { throw new ApiError(`Service unavailable (${response.status})`, response.status); }
   if (!response.ok) {
     if (response.status === 401 && authenticated) showLogin();
     throw new ApiError(data.error?.message || `Request failed (${response.status})`, response.status);
@@ -38,13 +164,29 @@ async function api(path, body) {
   return data;
 }
 
-function notice(message = '') {
+let actionNotice = '';
+let connectionNotice = '';
+
+function renderNotice() {
+  const message = [actionNotice, connectionNotice].filter(Boolean).join(' ');
   $('notice').textContent = message;
   $('notice').hidden = !message;
 }
 
+function notice(message = '') {
+  actionNotice = message;
+  renderNotice();
+}
+
+function connectionWarning(message = '') {
+  connectionNotice = message;
+  renderNotice();
+}
+
 function showLogin() {
+  clearPhotos();
   authenticated = false;
+  imageUploads = false;
   stream?.close();
   stream = null;
   connected = false;
@@ -61,6 +203,8 @@ function showLogin() {
   $('workspace').hidden = true;
   $('login').hidden = false;
   $('key').focus();
+  notice();
+  connectionWarning();
 }
 
 function start() {
@@ -80,10 +224,11 @@ function start() {
   source.onerror = () => {
     if (stream !== source) return;
     connected = false;
+    synced = false;
     $('connection').textContent = 'Reconnecting…';
     $('connection').classList.remove('online');
     renderControls();
-    notice('Connection interrupted. Work continues in Pi. Reconnecting and checking history…');
+    connectionWarning('Connection interrupted. Work continues in Pi. Reconnecting and checking history…');
     api('/api/auth').then(auth => { if (!auth.authenticated) showLogin(); }).catch(() => {});
   };
   source.addEventListener('sessions', () => refreshSessions());
@@ -94,7 +239,7 @@ function start() {
     try { envelope = JSON.parse(event.data); } catch { refreshSessions(true); return; }
     const entry = sessions.find(session => session.id === envelope.id);
     if (entry && entry.generation === envelope.generation && envelope.event?.type === 'state' &&
-        ['busy', 'runId', 'editorBusy', 'terminalRequired'].some(key =>
+        ['busy', 'runId', 'editorBusy', 'terminalRequired', 'supportsImages'].some(key =>
           entry.state?.[key] !== envelope.event.state?.[key])) {
       entry.state = { ...envelope.event.state };
       renderSessions();
@@ -116,6 +261,7 @@ async function refreshSessions(resnapshot = false) {
   try {
     const data = await api('/api/sessions');
     if (version !== listVersion || !authenticated) return;
+    imageUploads = data.imageUploads === true;
     sessions = data.sessions;
     if (selected) {
       const next = sessions.find(session => session.id === selected.id);
@@ -124,10 +270,12 @@ async function refreshSessions(resnapshot = false) {
         notice('That session is no longer available. Choose another main session.');
       } else {
         const changed = next.generation !== selected.generation;
+        if (changed) clearPhotos();
         selected = next;
         if (changed || resnapshot) refreshSnapshot();
       }
     }
+    if (connected && !selected) connectionWarning();
     renderSessions();
     renderHeader();
     renderControls();
@@ -168,6 +316,7 @@ function statusText(state = {}) {
 }
 
 function selectSession(session) {
+  if (selected?.id !== session?.id) clearPhotos();
   selectionVersion++;
   selected = session;
   transcript = createTranscript();
@@ -202,6 +351,7 @@ async function refreshSnapshot() {
         break;
       }
     }
+    if (connected && !resnapshotNeeded) connectionWarning();
     renderTranscript();
   } catch (error) {
     if (version === selectionVersion) notice(`Could not sync conversation: ${error.message}. Use Refresh to try again.`);
@@ -221,7 +371,6 @@ async function refreshSnapshot() {
 function renderHeader() {
   $('session-name').textContent = selected?.name || 'Choose a session';
   $('session-context').textContent = selected ? `${selected.projectRoot || 'No project'}${selected.branch ? ` · ${selected.branch}` : ''}` : 'Your live workspace';
-  $('session-status').textContent = selected ? statusText(transcript.generation ? transcript.state : selected.state) : '';
 }
 
 function renderTranscript() {
@@ -229,37 +378,53 @@ function renderTranscript() {
   const nearBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 100;
   const nodes = transcript.messages.map(message => {
     const article = document.createElement('article');
-    article.className = `message ${['user', 'assistant', 'tool'].includes(message.role) ? message.role : 'tool'}`;
+    const paj = message.role === 'assistant' && message.customType === 'paj-messages';
+    article.className = `message ${paj ? 'paj' : ['user', 'assistant', 'tool'].includes(message.role) ? message.role : 'tool'}`;
     const role = document.createElement('h3');
-    role.textContent = message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Assistant' : 'Tool';
+    role.className = 'message-role';
+    role.textContent = paj ? 'Paj agents' : message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Assistant' : 'Tool';
     const text = document.createElement('div');
-    text.className = 'message-text';
-    text.textContent = message.text || '';
+    text.className = paj ? 'message-text markdown' : 'message-text';
+    if (paj) renderMarkdown(text, message.text || '');
+    else text.textContent = message.text || '';
     article.append(role, text);
+    if (Number.isSafeInteger(message.imageCount) && message.imageCount > 0) {
+      const caption = document.createElement('div');
+      caption.className = 'photo-caption';
+      caption.textContent = `${message.imageCount} photo${message.imageCount === 1 ? '' : 's'} attached`;
+      article.append(caption);
+    }
     return article;
   });
   $('messages').replaceChildren(...nodes);
   $('welcome').hidden = Boolean(selected);
   $('older').hidden = !selected || !transcript.hasMore;
-  if (nearBottom) viewport.scrollTop = viewport.scrollHeight;
   renderHeader();
   renderControls();
+  if (nearBottom) viewport.scrollTop = viewport.scrollHeight;
 }
 
 function renderControls() {
   const ready = authenticated && connected && selected && synced && transcript.generation && !snapshotting;
   const blocked = transcript.state.editorBusy || transcript.state.terminalRequired;
   const pending = awaitingConfirmation(transcript.state);
-  $('prompt').disabled = !ready || blocked;
-  $('send').disabled = !ready || blocked || pending || sending || !$('prompt').value.trim();
+  workingIndicator.hidden = !(authenticated && connected && selected && transcript.generation &&
+    !blocked && transcript.state.busy && transcript.state.runId);
+  // Disabling the draft during resync dismisses mobile keyboards.
+  $('prompt').disabled = !authenticated || !selected;
+  $('send').disabled = !ready || blocked || pending || sending || preparingPhotos ||
+    (!$('prompt').value.trim() && photos.length === 0) ||
+    (photos.length > 0 && (!imageUploads || transcript.state.supportsImages !== true));
   $('send').textContent = sending ? 'Submitting…' : 'Send ↑';
   $('stop').disabled = !ready || stopping || !transcript.state.busy || !transcript.state.runId || transcript.state.editorBusy;
   $('composer-hint').textContent = transcript.state.terminalRequired
     ? 'This session needs attention in the terminal.'
     : transcript.state.editorBusy ? 'An editor request owns this session. Send is unavailable.'
       : snapshotting ? 'Synchronizing conversation…'
-        : pending ? 'Awaiting Pi confirmation. Submitted does not mean accepted. Sending is paused; check the terminal. If dispatch remains uncertain, restart that Pi process before retrying.'
-          : 'Submitted does not mean accepted. Watch the conversation for confirmation.';
+        : pending ? 'Awaiting Pi confirmation. Sending is paused; check the terminal. If dispatch remains uncertain, restart that Pi process before retrying.'
+          : '';
+  $('composer-hint').hidden = !$('composer-hint').textContent;
+  renderPhotoControls();
 }
 
 $('login-form').onsubmit = async event => {
@@ -281,24 +446,39 @@ $('logout').onclick = async () => {
 $('refresh').onclick = () => refreshSessions(true);
 $('back').onclick = () => $('workspace').classList.remove('show-conversation');
 $('prompt').oninput = renderControls;
+$('deliver-as').onchange = () => {
+  const current = $('delivery-current');
+  if (current) current.textContent = { steer: 'Steer', reject: 'Reject',
+    followUp: 'Queue follow-up' }[$('deliver-as').value] || 'Steer';
+};
+$('deliver-as').onchange();
+$('attach-photo').onclick = () => $('photo-library').click();
+$('take-photo').onclick = () => $('photo-camera').click();
+$('photo-library').onchange = selectPhotos;
+$('photo-camera').onchange = selectPhotos;
 $('composer').onsubmit = async event => {
   event.preventDefault();
   if ($('send').disabled) return;
   const version = selectionVersion;
   const text = $('prompt').value;
+  const images = photos.map(photo => ({ mimeType: photo.mimeType, data: photo.data }));
+  const revision = photoRevision;
   const id = selected.id;
   sending = true;
   renderControls();
   try {
-    await api(`/api/sessions/${encodeURIComponent(id)}/prompt`, {
+    const action = images.length ? 'image-prompt' : 'prompt';
+    await api(`/api/sessions/${encodeURIComponent(id)}/${action}`, {
       generation: transcript.generation,
       requestId: crypto.randomUUID(),
       text,
+      ...(images.length ? { images } : {}),
       deliverAs: $('deliver-as').value,
     });
     if (version === selectionVersion) {
       if ($('prompt').value === text) $('prompt').value = '';
-      notice('Instruction submitted. Check the conversation to confirm it was accepted.');
+      if (revision === photoRevision) clearPhotos();
+      notice();
     }
   } catch (error) {
     if (version === selectionVersion) notice(error instanceof ApiError && error.status < 500

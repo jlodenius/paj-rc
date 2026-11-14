@@ -19,7 +19,7 @@ async function until(predicate, timeout = 10000) {
   throw new Error('Browser condition timed out');
 }
 
-test('real mobile browser can pair, open chat, and submit without rendering executable transcript HTML',
+test('real mobile browser pairs, renders safely, preserves draft focus, and reconnects',
   { skip: !process.env.PAJ_RC_BROWSER_BIN, timeout: 30000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'paj-rc-browser-'));
   const paths = { runtimeDir: root, socketPath: join(root, 'daemon.sock') };
@@ -27,16 +27,26 @@ test('real mobile browser can pair, open chat, and submit without rendering exec
     name: 'Backend', projectRoot: '/projects/backend', role: 'primary', parentPiSessionId: null };
   const config = { port: 0, allowedOrigins: [], idleTimeoutMs: 60000,
     pairingKey: randomBytes(32).toString('base64url') };
-  const state = { busy: false, runId: null, editorBusy: false, terminalRequired: false };
+  const state = { busy: false, runId: null, editorBusy: false, terminalRequired: false, supportsImages: true };
   const submissions = [];
   const listeners = new Set();
+  let seq = 0;
+  let snapshots = 0;
+  const emit = event => {
+    const frame = { type: 'event', seq: ++seq, event };
+    for (const listener of listeners) listener(frame);
+  };
   const adapter = { identity, generation: randomUUID(), eligible: () => true, state: () => state,
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    snapshot() { return { sessionId: identity.piSessionId, generation: this.generation, seq: 0, state,
-      messages: [{ id: 'm1', role: 'assistant', text: '<img src=x onerror=alert(1)> Safe text' }],
+    snapshot() { snapshots++; return { sessionId: identity.piSessionId, generation: this.generation, seq, state,
+      messages: [{ id: 'older-user', role: 'user', text: 'Review the earlier changes' },
+        { id: 'm1', role: 'assistant', text: '<img src=x onerror=alert(1)> Safe text' },
+        { id: 'latest-user', role: 'user', text: 'Check the latest changes' },
+        { id: 'paj', role: 'assistant', customType: 'paj-messages',
+          text: '## Agent review\n\n**All checks passed.**\n\n- Updated `src/app.js`\n- Preserved your changes\n\n```js\nconst safe = true;\n```\n\n<img src=x onerror=alert(1)>\n\n[Unsafe](javascript:alert(1))' }],
       hasMore: false, before: null }; },
     prompt(params) { submissions.push(params); return { status: 'submitted', requestId: params.requestId }; } };
-  const daemon = await startDaemon(config, { paths, listSessions: async () => [identity] });
+  let daemon = await startDaemon(config, { paths, listSessions: async () => [identity] });
   const connector = createConnector({ adapter, socketPath: paths.socketPath, ensureService: async () => true });
   connector.start();
   const profile = join(root, 'browser');
@@ -84,22 +94,287 @@ test('real mobile browser can pair, open chat, and submit without rendering exec
   await call('Page.enable');
   await call('Runtime.enable');
   await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
   await call('Page.navigate', { url: daemon.address });
   await until(() => evaluate('document.querySelector("#key") && document.readyState === "complete"'));
+  await until(() => evaluate('navigator.serviceWorker.controller !== null'));
+  assert.equal(await evaluate('document.querySelector("#deliver-as").value'), 'steer');
+  const manifest = await call('Page.getAppManifest');
+  assert.deepEqual(manifest.errors, []);
+  assert.equal(JSON.parse(manifest.data).display, 'standalone');
+  const installability = await call('Page.getInstallabilityErrors');
+  assert.deepEqual(installability.installabilityErrors, []);
   await evaluate(`document.querySelector('#key').value = ${JSON.stringify(config.pairingKey)}; document.querySelector('#login-form').requestSubmit(); true`);
   await until(() => evaluate('document.querySelectorAll(".session-card").length === 1'));
   await evaluate('document.querySelector(".session-card").click(); true');
-  await until(() => evaluate('!document.querySelector("#prompt").disabled'));
+  await until(() => evaluate('!document.querySelector("#prompt").disabled && document.querySelector(".message.paj")'));
   assert.equal(await evaluate('document.querySelector("#messages").textContent.includes("<img src=x")'), true);
   assert.equal(await evaluate('document.querySelectorAll("#messages img").length'), 0);
+  assert.equal(await evaluate('document.querySelector("#back").textContent'), '/sessions');
+  assert.equal(await evaluate('document.querySelector(".back-arrow")'), null);
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".back-slash")).color'), 'rgb(239, 83, 80)');
+  assert.equal(await evaluate('document.querySelector("#session-status")'), null);
+  assert.equal(await evaluate(`(() => {
+    const title = document.querySelector('.heading').getBoundingClientRect();
+    const back = document.querySelector('#back').getBoundingClientRect();
+    return title.right <= back.left && back.bottom > title.top && back.top < title.bottom;
+  })()`), true);
+  assert.equal(await evaluate('getComputedStyle(document.querySelector("#back")).borderTopWidth'), '0px');
+  assert.equal(await evaluate('document.querySelector(".delivery").nextElementSibling.id'), 'send');
+  assert.equal(await evaluate('document.querySelector("#delivery-current").textContent'), 'Steer');
+  for (const [value, label] of [['followUp', 'Queue follow-up'], ['reject', 'Reject'], ['steer', 'Steer']]) {
+    await evaluate(`(() => {
+      const mode = document.querySelector('#deliver-as');
+      mode.value = ${JSON.stringify(value)}; mode.dispatchEvent(new Event('change'));
+    })()`);
+    assert.equal(await evaluate('document.querySelector("#delivery-current").textContent'), label);
+  }
+  await evaluate('document.querySelector("#deliver-as").focus(); true');
+  assert.equal(await evaluate('document.activeElement.id'), 'deliver-as');
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".delivery")).outlineStyle'), 'solid');
+  assert.equal(await evaluate(`(() => {
+    const rect = document.querySelector('#back').getBoundingClientRect();
+    return rect.height >= 44 && rect.width < 220;
+  })()`), true);
+  await evaluate('document.querySelector("#back").click(); true');
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".sidebar")).display'), 'flex');
+  await evaluate('document.querySelector(".session-card").click(); true');
+  await until(() => evaluate('document.querySelector(".message.paj")'));
+  assert.equal(await evaluate('document.querySelector(".message.paj > .message-role").textContent'), 'Paj agents');
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".heading h2"), "::before").content'), '"# "');
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".message.paj h2"), "::before").content'), '"## "');
+  assert.equal(await evaluate('document.querySelector(".message.paj h2").textContent'), 'Agent review');
+  assert.equal(await evaluate('document.querySelector(".message.paj strong").textContent'), 'All checks passed.');
+  assert.equal(await evaluate('document.querySelectorAll(".message.paj ul li").length'), 2);
+  assert.equal(await evaluate('document.querySelector(".message.paj pre code").textContent.trim()'), 'const safe = true;');
+  assert.equal(await evaluate('document.querySelector(".message.paj").textContent.includes("<img src=x")'), true);
+  assert.equal(await evaluate('document.querySelectorAll(".message.paj a").length'), 0);
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".message.paj")).backgroundColor'), 'rgb(240, 232, 250)');
+  await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".message.paj")).backgroundColor'), 'rgb(48, 33, 63)');
+  await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
+  assert.equal(await evaluate('document.querySelector("#composer-hint").hidden'), true);
+  assert.equal(await evaluate('document.querySelector("#composer-hint").textContent'), '');
+  assert.equal(await evaluate('getComputedStyle(document.body).backgroundColor'), 'rgb(255, 255, 255)');
+  await evaluate('document.fonts.ready');
+  assert.equal(await evaluate('document.fonts.check(\'14px "Fira Code"\')'), true);
+  assert.equal(await evaluate('document.fonts.check(\'24px "Space Grotesk"\')'), true);
+  assert.equal(await evaluate('document.querySelector("#working-indicator").hidden'), true);
+  await evaluate(`(() => {
+    const input = document.querySelector('#prompt');
+    input.focus(); input.value = 'Keep typing this draft'; input.setSelectionRange(5, 9);
+    window.draftBlurs = 0; input.addEventListener('blur', () => window.draftBlurs++);
+  })()`);
+  const previousSnapshots = snapshots;
+  emit({ type: 'reset' });
+  await until(() => snapshots > previousSnapshots);
+  await until(() => evaluate('document.querySelector("#composer-hint").hidden'));
+  assert.equal(await evaluate('window.draftBlurs'), 0, 'history sync must not blur the composer');
+  assert.deepEqual(await evaluate(`(() => {
+    const input = document.querySelector('#prompt');
+    return [document.activeElement === input, input.value, input.selectionStart, input.selectionEnd];
+  })()`), [true, 'Keep typing this draft', 5, 9]);
+  Object.assign(state, { busy: true, runId: 'run' });
+  emit({ type: 'state', state: { ...state } });
+  await until(() => evaluate('!document.querySelector("#working-indicator").hidden'));
+  assert.equal(await evaluate('document.querySelector("#working-indicator").parentElement.id'), 'composer');
+  assert.equal(await evaluate(`(() => {
+    const progress = document.querySelector('#working-indicator').getBoundingClientRect();
+    const input = document.querySelector('#prompt').getBoundingClientRect();
+    return progress.bottom <= input.top;
+  })()`), true);
+  const progressTop = await evaluate('document.querySelector("#working-indicator").getBoundingClientRect().top');
+  emit({ type: 'message', message: { id: 'tool', role: 'tool', text: 'Tool update\n'.repeat(150) } });
+  await until(() => evaluate('document.querySelector("#messages").textContent.includes("Tool update")'));
+  assert.equal(await evaluate('document.querySelector("#working-indicator").getBoundingClientRect().top'), progressTop);
+  const expectedFrames = [...'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'];
+  const sequence = await evaluate(`(() => {
+    const spinner = document.querySelector('#working-spinner');
+    const track = spinner.querySelector('.working-spinner-frames');
+    const animation = track.getAnimations()[0];
+    const glyphs = track.textContent.split('\\n');
+    const duration = animation.effect.getTiming().duration;
+    animation.pause();
+    const sequence = Array.from({ length: 11 }, (_, index) => {
+      animation.currentTime = index === 10 ? duration : (index + 0.5) * duration / 10;
+      const y = new DOMMatrixReadOnly(getComputedStyle(track).transform).m42;
+      return glyphs[Math.round(-y / spinner.getBoundingClientRect().height)];
+    });
+    animation.play();
+    return sequence;
+  })()`);
+  assert.deepEqual(sequence, [...expectedFrames, expectedFrames[0]],
+    'spinner must display all ten frames and loop without an empty frame');
+  const frames = new Set();
+  for (let index = 0; index < 6; index++) {
+    emit({ type: 'delta', messageId: 'm1', text: '.' });
+    await delay(70);
+    frames.add(await evaluate('getComputedStyle(document.querySelector(".working-spinner-frames")).transform'));
+  }
+  assert.ok(frames.size > 1, 'terminal spinner must keep animating while text streams');
+  assert.deepEqual(await evaluate(`(() => {
+    const input = document.querySelector('#prompt');
+    return [document.activeElement === input, input.value, input.selectionStart, input.selectionEnd];
+  })()`), [true, 'Keep typing this draft', 5, 9]);
+  const toolSnapshots = snapshots;
+  emit({ type: 'reset' });
+  await until(() => snapshots > toolSnapshots);
+  await until(() => evaluate('!document.querySelector("#messages").textContent.includes("Tool update")'));
+  assert.equal(await evaluate('document.activeElement === document.querySelector("#prompt")'), true);
+  assert.equal(await evaluate('document.querySelector("#working-indicator").hidden'), false);
+  assert.equal(await evaluate('document.querySelector("#working-spinner").getAttribute("aria-hidden")'), 'true');
+  await call('Emulation.setEmulatedMedia', { features: [
+    { name: 'prefers-color-scheme', value: 'light' }, { name: 'prefers-reduced-motion', value: 'reduce' },
+  ] });
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".working-spinner-frames")).animationName'), 'none');
+  const workingScreenshot = process.env.PAJ_RC_WORKING_SCREENSHOT;
+  if (workingScreenshot) {
+    const shot = await call('Page.captureScreenshot', { format: 'png' });
+    await writeFile(workingScreenshot, Buffer.from(shot.data, 'base64'));
+  }
+  Object.assign(state, { busy: false, runId: null });
+  emit({ type: 'state', state: { ...state } });
+  await until(() => evaluate('document.querySelector("#working-indicator").hidden'));
   const formId = await evaluate('document.querySelector("#prompt").form.id');
   await evaluate(`document.querySelector('#prompt').value = 'Run backend tests'; document.querySelector('#prompt').dispatchEvent(new Event('input')); document.querySelector(${JSON.stringify(`#${formId}`)}).requestSubmit(); true`);
   await until(() => submissions.length === 1);
   assert.equal(submissions[0].text, 'Run backend tests');
   assert.equal(submissions[0].generation, adapter.generation);
+  assert.equal(submissions[0].deliverAs, 'steer');
+  await until(() => evaluate('document.querySelector("#prompt").value === ""'));
+  assert.equal(await evaluate('document.querySelector("#notice").hidden'), true);
+  assert.equal(await evaluate('document.querySelector("#working-indicator").hidden'), true);
+  Object.assign(state, { busy: true, runId: 'steering-run' });
+  emit({ type: 'state', state: { ...state } });
+  await until(() => evaluate('!document.querySelector("#stop").disabled'));
+  for (const [index, text] of ['First steer', 'Second steer'].entries()) {
+    await evaluate(`(() => {
+      const input = document.querySelector('#prompt');
+      input.value = ${JSON.stringify(text)}; input.dispatchEvent(new Event('input'));
+      if (document.querySelector('#send').disabled) throw new Error('Steering unexpectedly disabled');
+      input.form.requestSubmit();
+    })()`);
+    await until(() => submissions.length === index + 2);
+    await until(() => evaluate('document.querySelector("#prompt").value === ""'));
+    assert.equal(submissions[index + 1].text, text);
+    assert.equal(submissions[index + 1].deliverAs, 'steer');
+  }
+  Object.assign(state, { busy: false, runId: null });
+  emit({ type: 'state', state: { ...state } });
+  await until(() => evaluate('document.querySelector("#working-indicator").hidden'));
+  await evaluate(`(async () => {
+    const noise = document.createElement('canvas'); noise.width = noise.height = 800;
+    const context = noise.getContext('2d');
+    const pixels = context.createImageData(800, 800); let seed = 12345;
+    for (let index = 0; index < pixels.data.length; index += 4) {
+      for (let channel = 0; channel < 3; channel++) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) | 0;
+        pixels.data[index + channel] = seed >>> 24;
+      }
+      pixels.data[index + 3] = 255;
+    }
+    context.putImageData(pixels, 0, 0);
+    const large = document.createElement('canvas'); large.width = 3000; large.height = 1800;
+    large.getContext('2d').fillRect(0, 0, 3000, 1800);
+    const toFile = async (canvas, name) => new File([
+      await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))
+    ], name, { type: 'image/png' });
+    window.testPhotos = [await toFile(noise, 'camera-photo.png'), await toFile(large, 'large-photo.png')];
+    const transfer = new DataTransfer(); for (const file of window.testPhotos) transfer.items.add(file);
+    const picker = document.querySelector('#photo-library'); picker.files = transfer.files;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await until(() => evaluate('document.querySelectorAll(".photo-preview img").length === 2'), 10000);
+  await until(() => evaluate('[...document.querySelectorAll(".photo-preview img")].every(image => image.naturalWidth > 0)'));
+  assert.equal(await evaluate('document.querySelectorAll(".photo-preview img")[1].naturalWidth'), 1600);
+  assert.equal(await evaluate('[...document.querySelectorAll(".photo-preview img")].every(image => image.src.startsWith("blob:"))'), true);
+  assert.equal(await evaluate('document.querySelector("#photo-camera").getAttribute("capture")'), 'environment');
+  assert.equal(await evaluate('document.querySelector("#send").disabled'), false);
+  const photoScreenshot = process.env.PAJ_RC_PHOTO_SCREENSHOT;
+  if (photoScreenshot) {
+    const shot = await call('Page.captureScreenshot', { format: 'png' });
+    await writeFile(photoScreenshot, Buffer.from(shot.data, 'base64'));
+  }
+  await evaluate('document.querySelector("#composer").requestSubmit(); true');
+  await until(() => submissions.length === 4);
+  await until(() => evaluate('document.querySelector("#photo-previews").hidden'));
+  assert.equal(submissions[3].text, '');
+  assert.equal(submissions[3].images.length, 2);
+  assert.equal(submissions[3].images[0].mimeType, 'image/jpeg');
+  assert.ok(Buffer.from(submissions[3].images[0].data, 'base64').length > 128 * 1024);
+  assert.ok(submissions[3].images.every(image => Buffer.from(image.data, 'base64').length <= 512 * 1024));
+  await evaluate(`(() => {
+    const transfer = new DataTransfer(); transfer.items.add(window.testPhotos[0]);
+    const picker = document.querySelector('#photo-library'); picker.files = transfer.files;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await until(() => evaluate('document.querySelectorAll(".photo-preview img").length === 1'), 10000);
+  Object.assign(state, { supportsImages: false }); emit({ type: 'state', state: { ...state } });
+  await until(() => evaluate('document.querySelector("#photo-status").textContent.includes("does not support")'));
+  assert.equal(await evaluate('document.querySelector("#send").disabled'), true);
+  await evaluate('document.querySelector(".photo-remove").click(); true');
+  assert.equal(await evaluate('document.querySelector("#photo-previews").hidden'), true);
+  Object.assign(state, { supportsImages: true }); emit({ type: 'state', state: { ...state } });
+  await until(() => evaluate('!document.querySelector("#attach-photo").disabled'));
+  await evaluate(`(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(['<svg xmlns="http://www.w3.org/2000/svg"/>'], 'unsafe.svg', { type: 'image/svg+xml' }));
+    const picker = document.querySelector('#photo-library'); picker.files = transfer.files;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await until(() => evaluate('document.querySelector("#photo-status").getAttribute("data-error") === "true"'));
+  assert.equal(await evaluate('document.querySelector("#photo-previews").hidden'), true);
+  assert.equal(submissions.length, 4);
+  const cached = await evaluate(`(async () => Promise.all((await caches.keys()).map(async name =>
+    (await (await caches.open(name)).keys()).map(request => new URL(request.url).pathname))))()`);
+  assert.ok(cached.flat().includes('/'));
+  assert.ok(cached.flat().includes('/markdown.js'));
+  assert.equal(cached.flat().some(path => path.startsWith('/api/')), false);
   assert.equal(exceptions.length, 0);
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
+  assert.equal(await evaluate(`(() => {
+    const mode = document.querySelector('.delivery').getBoundingClientRect();
+    const actions = document.querySelector('.send-actions').getBoundingClientRect();
+    return Math.abs(mode.top - actions.top) < 2;
+  })()`), true, 'mobile send controls should fit on one row');
   const screenshot = await call('Page.captureScreenshot', { format: 'png' });
   const screenshotPath = process.env.PAJ_RC_SCREENSHOT;
   if (screenshotPath) await writeFile(screenshotPath, Buffer.from(screenshot.data, 'base64'));
+  const darkScreenshotPath = process.env.PAJ_RC_DARK_SCREENSHOT;
+  await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
+  assert.equal(await evaluate('getComputedStyle(document.body).backgroundColor'), 'rgb(18, 18, 18)');
+  if (darkScreenshotPath) {
+    const dark = await call('Page.captureScreenshot', { format: 'png' });
+    await writeFile(darkScreenshotPath, Buffer.from(dark.data, 'base64'));
+  }
+  await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 430, deviceScaleFactor: 1, mobile: true });
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
+  assert.equal(await evaluate('document.querySelector("#prompt").getBoundingClientRect().bottom <= innerHeight'), true);
+  await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
+  const desktopScreenshotPath = process.env.PAJ_RC_DESKTOP_SCREENSHOT;
+  if (desktopScreenshotPath) {
+    const desktop = await call('Page.captureScreenshot', { format: 'png' });
+    await writeFile(desktopScreenshotPath, Buffer.from(desktop.data, 'base64'));
+  }
+  await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  const address = daemon.address;
+  config.port = Number(new URL(address).port);
+  config.allowedOrigins = [address];
+  await daemon.close();
+  await until(() => evaluate('document.querySelector("#notice").textContent.includes("Connection interrupted")'));
+  assert.equal(await evaluate('document.activeElement === document.querySelector("#prompt")'), true);
+  daemon = await startDaemon(config, { paths, listSessions: async () => [identity] });
+  await until(() => evaluate('document.querySelector("#connection").textContent === "Connected" && document.querySelector("#notice").hidden'));
+  assert.equal(await evaluate('document.activeElement === document.querySelector("#prompt")'), true);
+  assert.equal(await evaluate('document.querySelector(".message.paj h2").textContent'), 'Agent review');
+  await daemon.close();
+  await call('Page.reload');
+  await until(() => evaluate('document.querySelector("#login-error")?.textContent.includes("Cannot reach")'));
+  assert.equal(await evaluate('document.querySelector("#messages").children.length'), 0);
+  assert.equal(await evaluate(`fetch('/api/auth').then(() => false, () => true)`), true);
+  daemon = await startDaemon(config, { paths, listSessions: async () => [identity] });
+  await call('Page.reload');
+  await until(() => evaluate('document.querySelector("#login").hidden && document.querySelectorAll(".session-card").length === 1'));
+  assert.equal(submissions.length, 4);
 });

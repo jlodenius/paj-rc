@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { setImmediate as immediate, setTimeout as delay } from 'node:timers/promises';
 import { createSessionAdapter, isEligible, projectMessage } from '../src/session.js';
 
@@ -12,7 +13,7 @@ function harness(options = {}) {
   let identity = { id: 'paj', piSessionId: 'pi', pid: 123, role: 'primary', name: 'Main' };
   const reservations = new Set();
   const branch = [];
-  const ctx = { mode: 'tui', hasUI: true, isIdle: () => idle,
+  const ctx = { mode: 'tui', hasUI: true, model: { input: ['text', 'image'] }, isIdle: () => idle,
     sessionManager: { getSessionId: () => 'pi', getBranch: () => branch },
     abort: () => calls.push('abort') };
   const pi = {
@@ -25,8 +26,12 @@ function harness(options = {}) {
     sendUserMessage(text, args) { calls.push({ text, args }); options.send?.(text); },
   };
   const paj = { version: 1, getSnapshot: () => ({ identity, editorBusy }),
-    tryReserve(token) { if (editorBusy || reservations.size) return false;
-      reservations.add(token); return true; },
+    tryReserve(token) {
+      if (editorBusy) return false;
+      if (reservations.has(token)) return true;
+      if (reservations.size) return false;
+      reservations.add(token); return true;
+    },
     release(token) { reservations.delete(token); } };
   const adapter = createSessionAdapter({ pi, ctx, paj, env: {}, pid: 123, ...options });
   adapter.subscribe((frame) => emitted.push(frame));
@@ -38,7 +43,9 @@ function harness(options = {}) {
     },
     idle(value) { idle = value; }, editor(value) { editorBusy = value; },
     identity(value) { identity = value; },
-    event(name, event = {}) { for (const fn of events.get(name) ?? []) fn(event, ctx); },
+    event(name, event = {}, currentCtx = ctx) {
+      for (const fn of events.get(name) ?? []) fn(event, currentCtx);
+    },
     prompt(extra = {}) {
       return adapter.prompt(params({ requestId: 'request', text: 'Hello', deliverAs: 'reject', ...extra }));
     } };
@@ -89,6 +96,14 @@ test('history is current-branch paginated text only; secrets and payloads stay o
   assert.ok(Buffer.byteLength(JSON.stringify(escaped.text)) <= 8194);
   assert.deepEqual(projectMessage({ role: 'custom', display: true, content: 'Visible report' }, 'custom'),
     { id: 'custom', role: 'assistant', text: 'Visible report' });
+  assert.deepEqual(projectMessage({ role: 'custom', customType: 'paj-messages', display: true,
+    content: '**Agent report**', details: { secret: 'SECRET' } }, 'paj'),
+  { id: 'paj', role: 'assistant', text: '**Agent report**', customType: 'paj-messages' });
+  assert.deepEqual(projectMessage({ role: 'assistant', customType: 'paj-messages',
+    content: 'Ordinary response' }, 'normal'),
+  { id: 'normal', role: 'assistant', text: 'Ordinary response' });
+  assert.equal(projectMessage({ role: 'custom', customType: 'paj-messages', display: false,
+    content: 'SECRET' }, 'hidden-paj'), null);
   assert.equal(projectMessage({ role: 'custom', display: false, content: 'SECRET' }, 'hidden'), null);
   h.adapter.close();
 });
@@ -99,12 +114,15 @@ test('visible Paj reports reconcile numeric live timestamps with ISO custom-entr
   h.event('message_end', { message: { role: 'custom', customType: 'paj-messages',
     display: true, content: 'Review completed', timestamp } });
   await delay(40);
-  assert.equal(h.adapter.snapshot(h.params()).messages.length, 1);
+  assert.equal(h.adapter.snapshot(h.params()).messages[0].customType, 'paj-messages');
+  assert.ok(h.emitted.some(frame => frame.event.type === 'message' &&
+    frame.event.message.customType === 'paj-messages'));
   h.branch.push({ type: 'custom_message', id: 'report', customType: 'paj-messages',
     display: true, content: 'Review completed', timestamp: new Date(timestamp + 10).toISOString() });
   await delay(100);
   const snapshot = h.adapter.snapshot(h.params());
-  assert.deepEqual(snapshot.messages, [{ id: 'report', role: 'assistant', text: 'Review completed' }]);
+  assert.deepEqual(snapshot.messages, [{ id: 'report', role: 'assistant', text: 'Review completed',
+    customType: 'paj-messages' }]);
   assert.ok(h.emitted.some(frame => frame.event.type === 'reset'));
   h.adapter.close();
 });
@@ -126,6 +144,85 @@ test('void submission is not acceptance; literal input, dedup and explicit busy 
   h.prompt({ requestId: 'followup', deliverAs: 'followUp' });
   assert.equal(h.calls.at(-1).args.deliverAs, 'followUp');
   h.adapter.close();
+});
+
+test('multiple steering messages can be queued during the same running turn', () => {
+  const h = harness();
+  h.idle(false);
+  h.event('agent_start');
+  assert.equal(h.prompt({ requestId: 'first-steer', text: 'First correction',
+    deliverAs: 'steer' }).status, 'submitted');
+  assert.equal(h.prompt({ requestId: 'second-steer', text: 'Second correction',
+    deliverAs: 'steer' }).status, 'submitted');
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[0].args.deliverAs, 'steer');
+  assert.equal(h.calls[1].args.deliverAs, 'steer');
+  assert.equal(h.reservations.size, 1);
+  assert.equal(h.prompt({ requestId: 'second-steer', text: 'Second correction',
+    deliverAs: 'steer' }).duplicate, true);
+  assert.equal(h.calls.length, 2);
+  h.idle(true);
+  assert.throws(() => h.prompt({ requestId: 'idle-steer', deliverAs: 'steer' }), { code: 'busy' });
+  h.event('agent_settled');
+  assert.equal(h.reservations.size, 0);
+  assert.equal(h.adapter.state().busy, false);
+  h.adapter.close();
+});
+
+test('active steering and follow-ups share a reservation without allowing reject-mode input', () => {
+  const h = harness();
+  h.idle(false);
+  h.event('agent_start');
+  h.prompt({ requestId: 'steer', deliverAs: 'steer' });
+  h.prompt({ requestId: 'follow-up', deliverAs: 'followUp' });
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.reservations.size, 1);
+  assert.throws(() => h.prompt({ requestId: 'reject', deliverAs: 'reject' }), { code: 'busy' });
+  h.editor(true);
+  assert.throws(() => h.prompt({ requestId: 'editor', deliverAs: 'steer' }), { code: 'editor_busy' });
+  h.adapter.close();
+});
+
+test('an idle submission remains exclusive until agent_start confirms it', () => {
+  const h = harness();
+  h.prompt();
+  h.idle(false);
+  h.event('before_agent_start');
+  assert.throws(() => h.prompt({ requestId: 'early-steer', deliverAs: 'steer' }), { code: 'busy' });
+  h.event('agent_start');
+  h.prompt({ requestId: 'steer', deliverAs: 'steer' });
+  h.prompt({ requestId: 'another-steer', deliverAs: 'steer' });
+  assert.equal(h.calls.length, 3);
+  h.adapter.close();
+});
+
+test('a failed additional steer preserves the reservation and deduplicates its failure', () => {
+  const h = harness({ send(text) { if (text === 'fail') throw new Error('submission failed'); } });
+  h.idle(false);
+  h.event('agent_start');
+  h.prompt({ requestId: 'first', deliverAs: 'steer' });
+  for (let index = 0; index < 2; index++) {
+    assert.throws(() => h.prompt({ requestId: 'failed', text: 'fail', deliverAs: 'steer' }),
+      { code: 'submission_failed' });
+  }
+  assert.equal(h.reservations.size, 1);
+  assert.equal(h.calls.length, 2);
+  h.prompt({ requestId: 'next', deliverAs: 'steer' });
+  assert.equal(h.calls.length, 3);
+  h.adapter.close();
+});
+
+test('active queue reuse cannot take another external client reservation', () => {
+  const h = harness();
+  h.idle(false);
+  h.event('agent_start');
+  h.prompt({ requestId: 'first', deliverAs: 'steer' });
+  h.reservations.clear();
+  h.reservations.add('another-client');
+  assert.throws(() => h.prompt({ requestId: 'second', deliverAs: 'steer' }), { code: 'editor_busy' });
+  assert.equal(h.calls.length, 1);
+  h.adapter.close();
+  assert.deepEqual([...h.reservations], ['another-client']);
 });
 
 test('editor ownership excludes prompt and stop without applying bridge policies', () => {
@@ -296,4 +393,63 @@ test('bounded dedup and synchronous submission errors are stable', () => {
   assert.equal(failure.calls.length, 1);
   assert.equal(failure.reservations.size, 0);
   failure.adapter.close();
+});
+
+
+test('image prompts preserve exact SDK content, image-only input, capability and hash dedup', () => {
+  const image = { mimeType: 'image/png', data: readFileSync(
+    new URL('../public/icons/icon-192.png', import.meta.url)).toString('base64') };
+  const other = { mimeType: 'image/png', data: readFileSync(
+    new URL('../public/icons/icon-512.png', import.meta.url)).toString('base64') };
+  const h = harness();
+  assert.equal(h.adapter.state().supportsImages, true);
+  h.prompt({ text: '', images: [image] });
+  assert.deepEqual(h.calls[0], { text: [{ type: 'image', ...image }],
+    args: { expandPromptTemplates: false } });
+  h.ctx.model = { input: ['text'] };
+  h.event('model_select');
+  assert.equal(h.emitted.at(-1).event.state.supportsImages, false);
+  assert.equal(h.prompt({ text: '', images: [image] }).duplicate, true);
+  assert.throws(() => h.prompt({ text: '', images: [other] }), { code: 'request_conflict' });
+  assert.throws(() => h.prompt({ requestId: 'new-image', text: '', images: [image] }),
+    { code: 'images_unsupported' });
+  h.ctx.model = undefined;
+  assert.equal(h.adapter.state().supportsImages, false);
+  h.ctx.model = { input: ['image', 'text'] };
+  h.idle(false); h.event('agent_start');
+  h.prompt({ requestId: 'with-caption', text: 'Describe this', images: [image], deliverAs: 'steer' });
+  h.prompt({ requestId: 'second-image', text: '', images: [other], deliverAs: 'steer' });
+  assert.equal(h.reservations.size, 1);
+  assert.deepEqual(h.calls[1].text, [{ type: 'text', text: 'Describe this' }, { type: 'image', ...image }]);
+  assert.equal(h.calls[1].args.deliverAs, 'steer');
+  assert.throws(() => h.prompt({ requestId: 'bad-image', images: [{ ...image, data: 'bad' }] }),
+    { status: 400, code: 'invalid_image' });
+  h.adapter.close();
+});
+
+test('model selection refreshes capability from the current event context', () => {
+  const h = harness();
+  h.event('model_select', {}, { ...h.ctx, model: { input: ['text'] } });
+  assert.equal(h.adapter.state().supportsImages, false);
+  assert.equal(h.emitted.at(-1).event.state.supportsImages, false);
+  h.event('model_select', {}, { ...h.ctx, model: { input: ['text', 'image'] } });
+  assert.equal(h.adapter.state().supportsImages, true);
+  h.adapter.close();
+});
+
+test('user image projections retain bounded counts and placeholders but never image payloads', () => {
+  const image = { type: 'image', mimeType: 'image/png', data: 'SECRET_IMAGE_BYTES', url: 'SECRET_URL' };
+  assert.deepEqual(projectMessage({ role: 'user', content: [image] }, 'one'),
+    { id: 'one', role: 'user', text: '[Image attached]', imageCount: 1 });
+  assert.deepEqual(projectMessage({ role: 'user', content: [image, image] }, 'two'),
+    { id: 'two', role: 'user', text: '[2 images attached]', imageCount: 2 });
+  assert.deepEqual(projectMessage({ role: 'user', content: [{ type: 'text', text: 'Caption' }, image] }, 'caption'),
+    { id: 'caption', role: 'user', text: 'Caption', imageCount: 1 });
+  assert.equal(projectMessage({ role: 'user', content: Array(50).fill(image) }, 'many').imageCount, 3);
+  const h = harness();
+  h.event('message_end', { message: { role: 'user', content: [image] } });
+  const snapshot = h.adapter.snapshot(h.params());
+  assert.equal(snapshot.messages[0].text, '[Image attached]');
+  assert.doesNotMatch(JSON.stringify([snapshot, h.emitted]), /SECRET/);
+  h.adapter.close();
 });

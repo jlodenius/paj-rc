@@ -2,9 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#171b19">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Paj Remote">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
   <title>Paj Remote</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
@@ -12,8 +18,8 @@
 <body>
   <main id="login" class="login" hidden>
     <form id="login-form" class="login-card" method="post">
-      <span class="brand">paj<span class="brand-dot"> / </span>remote</span>
-      <h1>Your sessions, within reach.</h1>
+      <span class="brand"><span class="brand-dot" aria-hidden="true"># </span>paj/remote</span>
+      <h1>Your terminal.<br>Within reach.</h1>
       <p>Connect to your running main agents. Work stays on your computer.</p>
       <label for="key">Pairing key</label>
       <input id="key" type="password" autocomplete="current-password" required spellcheck="false">
@@ -25,7 +31,7 @@
   <div id="workspace" class="workspace" hidden>
     <aside class="sidebar" aria-label="Sessions">
       <header class="sidebar-header">
-        <span class="brand">paj<span class="brand-dot"> / </span>remote</span>
+        <span class="brand"><span class="brand-dot" aria-hidden="true"># </span>paj/remote</span>
         <span id="connection" class="connection" role="status">Connecting</span>
       </header>
       <div class="section-heading"><h1>Main sessions</h1><button id="refresh" class="quiet">Refresh</button></div>
@@ -35,24 +41,34 @@
     </aside>
     <main class="conversation">
       <header class="conversation-header">
-        <button id="back" class="quiet back" aria-label="Back to sessions">← Sessions</button>
+        <div class="back-row"><button id="back" class="quiet back" aria-label="Back to sessions"><span class="back-slash" aria-hidden="true">/</span><span>sessions</span></button></div>
         <div class="heading"><h2 id="session-name">Choose a session</h2><p id="session-context">Your live workspace</p></div>
-        <span id="session-status" class="status"></span>
       </header>
       <div id="notice" class="notice" role="status" hidden></div>
       <div id="transcript" class="transcript" tabindex="0" aria-label="Conversation">
         <button id="older" class="quiet older" hidden>Load earlier messages</button>
         <div id="messages"></div>
-        <div id="welcome" class="welcome"><span class="welcome-mark">↗</span><h2>Pick up where you left off.</h2><p>Choose a main session to read its conversation and send an instruction.</p></div>
+        <div id="welcome" class="welcome"><span class="welcome-mark" aria-hidden="true">#</span><h2>Same agents.<br>Different screen.</h2><p>Choose a main session. Your code, tools, and work stay on your computer.</p></div>
       </div>
       <form id="composer" class="composer" method="post">
+        <div class="photo-toolbar">
+          <button id="attach-photo" type="button" class="quiet" disabled>+ photo</button>
+          <button id="take-photo" type="button" class="quiet" disabled>camera</button>
+          <span id="photo-status" class="photo-status" role="status">Up to 3 photos</span>
+        </div>
+        <input id="photo-library" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple hidden>
+        <input id="photo-camera" type="file" accept="image/*" capture="environment" hidden>
+        <div id="photo-previews" class="photo-previews" aria-label="Attached photos" hidden></div>
         <label for="prompt" class="sr-only">Message to selected session</label>
         <textarea id="prompt" placeholder="Send an instruction…" rows="3" maxlength="16000" disabled></textarea>
         <div class="composer-actions">
-          <div class="delivery"><label for="deliver-as">If busy</label><select id="deliver-as"><option value="reject">Reject</option><option value="steer">Steer current run</option><option value="followUp">Queue follow-up</option></select></div>
-          <div class="send-actions"><button id="stop" type="button" class="quiet" disabled>Stop run</button><button id="send" type="submit" class="primary" disabled>Send <span aria-hidden="true">↑</span></button></div>
+          <div class="send-actions">
+            <button id="stop" type="button" class="quiet" aria-label="Stop current run" disabled>Stop</button>
+            <div class="delivery"><label for="deliver-as" class="sr-only">Delivery mode when the agent is busy</label><span id="delivery-current" aria-hidden="true">Steer</span><span class="delivery-caret" aria-hidden="true">▾</span><select id="deliver-as"><option value="steer" selected>Steer current run</option><option value="reject">Reject</option><option value="followUp">Queue follow-up</option></select></div>
+            <button id="send" type="submit" class="primary" disabled>Send <span aria-hidden="true">↑</span></button>
+          </div>
         </div>
-        <p id="composer-hint" class="composer-hint">Instructions run in the selected live Pi session.</p>
+        <p id="composer-hint" class="composer-hint" role="status" hidden></p>
       </form>
     </main>
   </div>
