@@ -49,6 +49,23 @@ function state(value) {
     ...(typeof value.supportsImages === 'boolean' ? { supportsImages: value.supportsImages } : {}) };
 }
 
+function commandMetadata(value) {
+  if (!Array.isArray(value) || value.length > 128) throw new Error('Invalid session commands');
+  const seen = new Set();
+  return value.map(entry => {
+    if (!entry || typeof entry.name !== 'string' || !entry.name || entry.name.length > 100 ||
+        entry.name.startsWith('/') || /[\s\u0000-\u001f\u007f-\u009f]/u.test(entry.name) ||
+        !['skill', 'prompt'].includes(entry.source) ||
+        (entry.source === 'skill' && (!entry.name.startsWith('skill:') || entry.name.length === 6)) ||
+        typeof entry.description !== 'string' || entry.description.length > 240 ||
+        /[\u0000-\u001f\u007f-\u009f]/u.test(entry.description) || seen.has(entry.name)) {
+      throw new Error('Invalid session commands');
+    }
+    seen.add(entry.name);
+    return { name: entry.name, description: entry.description, source: entry.source };
+  });
+}
+
 async function removeStale(path) {
   try {
     const info = await lstat(path);
@@ -134,7 +151,8 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
         if (!pending) return;
         let result = frame.result;
         if (frame.ok === true && pending.method === 'snapshot') {
-          result = { ...result, state: state(result?.state) };
+          result = { ...result, state: state(result?.state),
+            ...(result?.commands === undefined ? {} : { commands: commandMetadata(result.commands) }) };
           endpoint.state = result.state;
         }
         endpoint.pending.delete(frame.id);

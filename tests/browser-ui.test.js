@@ -20,6 +20,7 @@ class Element {
   append(...children) { this.children.push(...children); }
   prepend(...children) { this.children.unshift(...children); }
   setAttribute() {}
+  removeAttribute() {}
   focus() {}
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));

@@ -33,6 +33,10 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
     context: { tokens: 200000, contextWindow: 500000 } };
   const submissions = [];
   const nativeSteers = [];
+  const commands = [
+    { name: 'review', description: 'Review changes', source: 'prompt' },
+    { name: 'skill:research', description: '<img src=x onerror=alert(1)> Research a topic', source: 'skill' },
+  ];
   const listeners = new Set();
   let seq = 0;
   let snapshots = 0;
@@ -42,7 +46,7 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   };
   const adapter = { identity, generation: randomUUID(), eligible: () => true, state: () => state,
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    snapshot() { snapshots++; return { sessionId: identity.piSessionId, generation: this.generation, seq, state,
+    snapshot() { snapshots++; return { sessionId: identity.piSessionId, generation: this.generation, seq, state, commands,
       messages: [
         { id: 'older-user', role: 'user', text: 'Review the earlier changes' },
         { id: 'm1', role: 'assistant', text: '<img src=x onerror=alert(1)> Safe text' },
@@ -128,6 +132,46 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   emit({ type: 'state', state: { ...state } });
   await until(() => evaluate('document.querySelector("#session-metadata .agent-context").textContent === "context: 200k/500k"'));
   assert.equal(await evaluate('document.querySelector("#photo-status").textContent'), '');
+  await evaluate(`(() => {
+    const input = document.querySelector('#prompt'); input.focus(); input.value = '/';
+    input.setSelectionRange(1, 1); input.dispatchEvent(new Event('input'));
+  })()`);
+  assert.equal(await evaluate('document.querySelectorAll(".command-option").length'), 2);
+  assert.equal(await evaluate('document.querySelectorAll("#command-completions img").length'), 0);
+  assert.equal(await evaluate('document.querySelector("#command-completions").textContent.includes("<img src=x")'), true);
+  await evaluate('window.menuOption = document.querySelector(".command-option"); true');
+  emit({ type: 'state', state: { ...state } });
+  await delay(40);
+  assert.equal(await evaluate('window.menuOption === document.querySelector(".command-option")'), true,
+    'Streaming state updates must not replace the option beneath a tapping finger');
+  await evaluate(`document.querySelector('#prompt').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', cancelable: true })); true`);
+  assert.equal(await evaluate('document.querySelector("#prompt").getAttribute("aria-activedescendant")'), 'command-option-0');
+  await evaluate(`document.querySelector('#prompt').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, cancelable: true })); true`);
+  assert.equal(await evaluate('document.querySelector("#prompt").value'), '/');
+  await evaluate(`document.querySelector('#prompt').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', cancelable: true })); true`);
+  assert.equal(await evaluate('document.querySelector("#prompt").value'), '/review ');
+  assert.equal(await evaluate('document.querySelector("#command-completions").hidden'), true);
+  assert.equal(submissions.length, 0, 'Completion must never submit');
+  await evaluate(`(() => {
+    const input = document.querySelector('#prompt'); input.value = '/re "API safety"';
+    input.setSelectionRange(3, 3); input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape' }));
+  })()`);
+  assert.equal(await evaluate('document.querySelector("#command-completions").hidden'), true);
+  await evaluate(`document.querySelector('#prompt').dispatchEvent(new Event('input')); true`);
+  await call('Emulation.setTouchEmulationEnabled', { enabled: true });
+  const commandTarget = await evaluate(`(() => {
+    const rect = document.querySelectorAll('.command-option')[1].getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  })()`);
+  await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [commandTarget] });
+  await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await until(() => evaluate('document.querySelector("#prompt").value === \'/skill:research "API safety"\''));
+  assert.equal(await evaluate('document.activeElement === document.querySelector("#prompt")'), true);
+  assert.equal(await evaluate('document.querySelector("#prompt").selectionStart'), 16);
+  assert.equal(submissions.length, 0);
+  await evaluate('document.querySelector("#prompt").value = ""; document.querySelector("#prompt").dispatchEvent(new Event("input")); true');
   assert.equal(await evaluate('document.querySelector("#messages").textContent.includes("<img src=x")'), true);
   assert.equal(await evaluate('document.querySelectorAll("#messages img").length'), 0);
   assert.equal(await evaluate('document.querySelector("#back").textContent'), '/sessions');

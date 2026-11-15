@@ -5,7 +5,7 @@ sessions from your phone or browser through [Paj](https://github.com/jlodenius/p
 
 ## Install
 
-Requires Linux with a systemd user manager, Node.js 22.19 or newer, Pi 1.2.x, and the latest
+Requires Linux with a systemd user manager, Node.js 22.19 or newer, Pi 1.2 or newer, and the latest
 [Paj CLI and Pi extension](https://github.com/jlodenius/paj#install).
 
 Install the CLI and the Pi extension separately:
@@ -53,6 +53,20 @@ paj-rc key
 
 Open <http://127.0.0.1:43187> and enter the key. Pair only trusted browsers: they can control Pi
 and its tools. Treat the key like a password. Your browser remembers its pairing.
+
+## Skills and prompts
+
+Select a session and type `/` to browse its loaded skills and prompt templates. Tap a suggestion,
+or use arrow keys and Enter/Tab, to insert it without sending. Add arguments, then send normally:
+
+```text
+/skill:research investigate this API
+/review "API compatibility"
+```
+
+Pi expands the selected skill or template, including when steering or queueing a follow-up. Terminal
+commands are not offered. After updating the extension, reload it and refresh the browser to load
+command suggestions; older adapters provide none.
 
 ## Remote access with Tailscale
 

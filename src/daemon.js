@@ -17,6 +17,7 @@ const assets = new Map([
   ['/session-info.js', ['session-info.js', 'text/javascript; charset=utf-8']],
   ['/submissions.js', ['submissions.js', 'text/javascript; charset=utf-8']],
   ['/text.js', ['text.js', 'text/javascript; charset=utf-8']],
+  ['/commands.js', ['commands.js', 'text/javascript; charset=utf-8']],
   ['/markdown.js', ['markdown.js', 'text/javascript; charset=utf-8']],
   ['/images.js', ['images.js', 'text/javascript; charset=utf-8']],
   ['/image-limits.js', ['image-limits.js', 'text/javascript; charset=utf-8']],

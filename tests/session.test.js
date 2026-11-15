@@ -24,6 +24,7 @@ function harness(options = {}) {
       return () => handlers.delete(fn);
     },
     sendUserMessage(text, args) { calls.push({ text, args }); options.send?.(text); },
+    ...(options.getCommands ? { getCommands: options.getCommands } : {}),
   };
   const paj = { version: 1, getSnapshot: () => ({ identity, editorBusy }),
     tryReserve(token) {
@@ -510,4 +511,82 @@ test('completion and reset events use current contexts and defer usage until per
   assert.equal(old.adapter.state().context, null);
   assert.equal(old.adapter.state().model, null);
   old.adapter.close();
+});
+
+test('snapshots advertise only bounded native skill/prompt commands with native collision precedence', () => {
+  const catalog = [
+    { name: 'blocked', source: 'extension' },
+    { name: 'blocked', source: 'prompt', description: 'Shadowed prompt' },
+    { name: 'skill:blocked', source: 'extension' },
+    { name: 'skill:blocked', source: 'skill' },
+    { name: 'review', source: 'prompt', description: 'Review\nchanges\u001b' },
+    { name: 'review', source: 'prompt', description: 'Duplicate' },
+    { name: 'skill:check', source: 'skill', description: 'x'.repeat(300),
+      sourceInfo: { path: 'SECRET' }, content: 'SECRET', raw: 'SECRET' },
+    ...Array.from({ length: 150 }, (_, i) => ({ name: `p${i}`, source: 'prompt' })),
+  ];
+  const h = harness({ getCommands: () => catalog });
+  const commands = h.adapter.snapshot(h.params()).commands;
+  assert.equal(commands.length, 128);
+  assert.deepEqual(commands[0], { name: 'review', source: 'prompt', description: 'Review changes' });
+  assert.equal(commands[1].name, 'skill:check');
+  assert.equal(commands[1].description.length, 240);
+  assert.doesNotMatch(JSON.stringify(commands), /SECRET|blocked|Duplicate/);
+  h.adapter.close();
+  const old = harness();
+  assert.equal(Object.hasOwn(old.adapter.snapshot(old.params()), 'commands'), false);
+  old.adapter.close();
+});
+
+test('only approved live commands opt into native expansion across delivery modes and photos', () => {
+  const image = { mimeType: 'image/png', data: readFileSync(new URL('../public/icons/icon-192.png', import.meta.url)).toString('base64') };
+  for (const deliverAs of ['reject', 'steer', 'followUp']) {
+    for (const images of [undefined, [image]]) {
+      for (const text of ['/review argument', '/skill:check argument', '/danger', '/blocked', '/unknown', 'ordinary']) {
+        const h = harness({ getCommands: () => [
+          { name: 'danger', source: 'extension' }, { name: 'blocked', source: 'extension' },
+          { name: 'blocked', source: 'prompt' }, { name: 'review', source: 'prompt' },
+          { name: 'skill:check', source: 'skill' },
+        ] });
+        if (deliverAs !== 'reject') { h.idle(false); h.event('agent_start'); }
+        h.prompt({ text, deliverAs, ...(images ? { images } : {}) });
+        assert.equal(h.calls[0].args.expandPromptTemplates, text.startsWith('/review ') || text.startsWith('/skill:check '), `${deliverAs}: ${text}`);
+        h.adapter.close();
+      }
+    }
+  }
+});
+
+test('explicit commands beyond the discovery cap still expand without relaxing native collision rules', () => {
+  const catalog = [{ name: 'blocked', source: 'extension' },
+    ...Array.from({ length: 130 }, (_, i) => ({ name: `p${i}`, source: 'prompt' })),
+    { name: 'skill:late', source: 'skill' }, { name: 'blocked', source: 'prompt' }];
+  for (const [text, expand] of [['/p129 argument', true], ['/skill:late argument', true], ['/blocked', false],
+    ['/p129\targument', true], ['/p129\nargument', true], ['/skill:late\targument', false],
+    ['/skill:late\nargument', false], ['/blocked\targument', false]]) {
+    const h = harness({ getCommands: () => catalog });
+    assert.equal(h.adapter.snapshot(h.params()).commands.length, 128);
+    assert.equal(h.adapter.snapshot(h.params()).commands.some(command => command.name === 'p129'), false);
+    h.prompt({ text });
+    assert.equal(h.calls[0].args.expandPromptTemplates, expand, text);
+    h.adapter.close();
+  }
+});
+
+test('missing, throwing and malformed native command catalogs cannot enable command dispatch', () => {
+  for (const catalog of [null, {}, [{ name: '/bad', source: 'prompt' }],
+    [{ name: 'bad name', source: 'prompt' }], [{ name: 'bad', source: 'skill' }],
+    [{ name: 'x'.repeat(101), source: 'prompt' }], [{ name: 'bad', source: 'other' }],
+    [{ name: 'review', source: 'prompt', description: {} }]]) {
+    const h = harness({ getCommands: () => catalog });
+    assert.deepEqual(h.adapter.snapshot(h.params()).commands, []);
+    h.prompt({ text: '/review argument' });
+    assert.equal(h.calls[0].args.expandPromptTemplates, false);
+    h.adapter.close();
+  }
+  const h = harness({ getCommands: () => { throw new Error('SECRET'); } });
+  assert.deepEqual(h.adapter.snapshot(h.params()).commands, []);
+  h.prompt({ text: '/review' });
+  assert.equal(h.calls[0].args.expandPromptTemplates, false);
+  h.adapter.close();
 });

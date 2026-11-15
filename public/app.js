@@ -4,6 +4,7 @@ import { prepareImage } from './images.js';
 import { MAX_IMAGES } from './image-limits.js';
 import { compactProjectPath } from './paths.js';
 import { sessionInfo } from './session-info.js';
+import { commandSuggestions, insertCommand } from './commands.js';
 import { createSubmissionFeedback, steeringLabel } from './submissions.js';
 
 if (globalThis.isSecureContext && globalThis.navigator?.serviceWorker) {
@@ -53,6 +54,97 @@ let projectPaths = [];
 let headerPath;
 const submissionFeedback = createSubmissionFeedback();
 const feedbackScope = (id, generation) => `${id}:${generation}`;
+let commandMenuKey = '';
+let commandOptions = [];
+let commandIndex = -1;
+let commandsDismissed = false;
+
+function closeCommandMenu() {
+  commandMenuKey = '';
+  commandOptions = [];
+  commandIndex = -1;
+  $('command-completions').replaceChildren();
+  $('command-completions').hidden = true;
+  $('prompt').removeAttribute('aria-activedescendant');
+}
+
+function chooseCommand(command, version) {
+  const input = $('prompt');
+  if (version !== selectionVersion || !synced || snapshotting || sending ||
+      !transcript.commands.some(item => item.name === command.name && item.source === command.source)) return;
+  const result = insertCommand(input.value, command.name);
+  if (!result) return;
+  if (result.text.length > 16000) { notice('Command would exceed the message limit. Shorten the arguments first.'); return; }
+  input.value = result.text;
+  input.focus();
+  input.setSelectionRange(result.cursor, result.cursor);
+  commandsDismissed = true;
+  closeCommandMenu();
+  renderControls();
+}
+
+function renderCommandMenu() {
+  const input = $('prompt');
+  const menu = $('command-completions');
+  const options = !commandsDismissed && authenticated && selected && connected && synced &&
+    !snapshotting && !sending && document.activeElement === input &&
+    transcript.generation === selected.generation
+    ? commandSuggestions(transcript.commands, input.value, input.selectionStart, input.selectionEnd) : [];
+  if (!options.length) { closeCommandMenu(); return; }
+  const key = JSON.stringify([selectionVersion, input.value, input.selectionStart, options]);
+  if (key === commandMenuKey) return;
+  commandMenuKey = key;
+  commandIndex = -1;
+  commandOptions = options;
+  const version = selectionVersion;
+  menu.replaceChildren(...options.map((command, index) => {
+    const button = document.createElement('button');
+    button.id = `command-option-${index}`;
+    button.type = 'button';
+    button.className = 'command-option';
+    button.tabIndex = -1;
+    button.setAttribute('role', 'option');
+    button.setAttribute('aria-selected', 'false');
+    const name = document.createElement('span');
+    name.className = 'command-name';
+    name.textContent = `/${command.name}`;
+    const kind = document.createElement('span');
+    kind.className = 'command-kind';
+    kind.textContent = command.source === 'skill' ? 'skill' : 'prompt';
+    const description = document.createElement('span');
+    description.className = 'command-description';
+    description.textContent = command.description || '';
+    button.title = command.description || command.name;
+    button.append(name, kind, description);
+    button.onpointerdown = event => event.preventDefault();
+    button.onclick = () => chooseCommand(command, version);
+    return button;
+  }));
+  input.removeAttribute('aria-activedescendant');
+  menu.hidden = false;
+}
+
+function commandKeydown(event) {
+  if (event.isComposing) return;
+  renderCommandMenu();
+  if ($('command-completions').hidden) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    commandsDismissed = true;
+    closeCommandMenu();
+  } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    commandIndex = commandIndex < 0 ? event.key === 'ArrowDown' ? 0 : commandOptions.length - 1
+      : (commandIndex + (event.key === 'ArrowDown' ? 1 : -1) + commandOptions.length) % commandOptions.length;
+    [...$('command-completions').children].forEach((node, index) => node.setAttribute('aria-selected', String(index === commandIndex)));
+    const active = $('command-completions').children[commandIndex];
+    $('prompt').setAttribute('aria-activedescendant', active.id);
+    active.scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'Tab' && !event.shiftKey || event.key === 'Enter' && commandIndex >= 0) {
+    event.preventDefault();
+    chooseCommand(commandOptions[Math.max(0, commandIndex)], selectionVersion);
+  }
+}
 
 function fitProjectPaths() {
   for (const entry of [...projectPaths, ...(headerPath ? [headerPath] : [])]) {
@@ -219,6 +311,7 @@ function connectionWarning(message = '') {
 function showLogin() {
   clearPhotos();
   submissionFeedback.clear();
+  closeCommandMenu();
   authenticated = false;
   imageUploads = false;
   stream?.close();
@@ -516,6 +609,7 @@ function renderControls() {
         : pending ? 'Awaiting Pi confirmation. Sending is paused; check the terminal. If dispatch remains uncertain, restart that Pi process before retrying.'
           : '';
   $('composer-hint').hidden = !$('composer-hint').textContent;
+  renderCommandMenu();
   renderPhotoControls();
 }
 
@@ -537,7 +631,13 @@ $('logout').onclick = async () => {
 };
 $('refresh').onclick = () => refreshSessions(true);
 $('back').onclick = () => $('workspace').classList.remove('show-conversation');
-$('prompt').oninput = renderControls;
+$('prompt').oninput = () => { commandsDismissed = false; renderControls(); };
+$('prompt').onfocus = () => { commandsDismissed = false; renderCommandMenu(); };
+$('prompt').onblur = closeCommandMenu;
+$('prompt').onclick = renderCommandMenu;
+$('prompt').onselect = renderCommandMenu;
+$('prompt').onkeyup = renderCommandMenu;
+$('prompt').onkeydown = commandKeydown;
 $('deliver-as').onchange = () => {
   const current = $('delivery-current');
   if (current) current.textContent = { steer: 'Steer', reject: 'Reject',

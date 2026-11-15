@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'paj-remote-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v7`;
+const CACHE_NAME = `${CACHE_PREFIX}v8`;
 const SHELL_PATHS = new Set([
   '/',
   '/app.js',
@@ -8,6 +8,7 @@ const SHELL_PATHS = new Set([
   '/session-info.js',
   '/submissions.js',
   '/text.js',
+  '/commands.js',
   '/markdown.js',
   '/images.js',
   '/image-limits.js',

@@ -1,5 +1,5 @@
 export function createTranscript() {
-  return { generation: null, seq: 0, state: {}, messages: [], hasMore: false, before: null };
+  return { generation: null, seq: 0, state: {}, commands: [], messages: [], hasMore: false, before: null };
 }
 
 export function applySnapshot(snapshot) {
@@ -7,6 +7,7 @@ export function applySnapshot(snapshot) {
     generation: snapshot.generation,
     seq: snapshot.seq,
     state: { ...snapshot.state },
+    commands: Array.isArray(snapshot.commands) ? snapshot.commands.map(command => ({ ...command })) : [],
     messages: snapshot.messages.map(message => ({ ...message })),
     hasMore: snapshot.hasMore,
     before: snapshot.before,

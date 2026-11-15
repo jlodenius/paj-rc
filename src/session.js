@@ -46,6 +46,32 @@ export function projectMessage(message, id) {
       ? { customType: 'paj-messages' } : {}) } : null;
 }
 
+function commandCatalog(pi) {
+  try {
+    if (typeof pi.getCommands !== 'function') return undefined;
+    const catalog = pi.getCommands();
+    if (!Array.isArray(catalog)) return [];
+    const commands = [];
+    const seen = new Set();
+    for (const entry of catalog) {
+      if (!entry || typeof entry.name !== 'string' || !entry.name || entry.name.length > 100 ||
+          entry.name.startsWith('/') || /[\s\u0000-\u001f\u007f-\u009f]/u.test(entry.name) ||
+          !['extension', 'skill', 'prompt'].includes(entry.source) ||
+          (entry.source === 'skill' && (!entry.name.startsWith('skill:') || entry.name.length === 6)) ||
+          (entry.description !== undefined && typeof entry.description !== 'string')) return [];
+      if (seen.has(entry.name)) continue;
+      seen.add(entry.name);
+      if (entry.source === 'extension') continue;
+      commands.push({ name: entry.name,
+        description: (entry.description || '').replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ').trim().slice(0, 240),
+        source: entry.source });
+    }
+    return commands;
+  } catch {
+    return [];
+  }
+}
+
 function modelMetadata(model) {
   const result = {};
   for (const key of ['id', 'provider', 'name']) {
@@ -308,7 +334,9 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
       if (!cursorSeen) fail('invalid_cursor', 'History cursor no longer exists; resnapshot');
       const hasMore = messages.length > 100;
       if (hasMore) messages.shift();
+      const commands = commandCatalog(pi);
       return { sessionId, generation, seq, state: state(), messages,
+        ...(commands === undefined ? {} : { commands: commands.slice(0, 128) }),
         hasMore, before: hasMore ? messages[0].id : null };
     },
     prompt(params) {
@@ -354,7 +382,11 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
           ...(text.trim() ? [{ type: 'text', text }] : []),
           ...images.map(image => ({ type: 'image', ...image })),
         ] : text;
-        pi.sendUserMessage(content, { expandPromptTemplates: false,
+        const skillName = text.startsWith('/') ? text.slice(1).split(' ', 1)[0] : null;
+        const promptName = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)?.[1];
+        const expandPromptTemplates = Boolean((skillName || promptName) && commandCatalog(pi)?.some(command =>
+          command.name === (command.source === 'skill' ? skillName : promptName)));
+        pi.sendUserMessage(content, { expandPromptTemplates,
           ...(deliverAs === 'reject' ? {} : { deliverAs }) });
         record.result = { status: 'submitted', requestId };
         emit({ type: 'state', state: state() });

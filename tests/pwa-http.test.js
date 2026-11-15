@@ -76,7 +76,7 @@ test('installable app exposes a scoped manifest, worker, PNG icons, and steering
     const response = await get(`/fonts/${font}-OFL.txt`);
     assert.match(await response.text(), /SIL OPEN FONT LICENSE/);
   }
-  for (const path of ['/images.js', '/image-limits.js', '/paths.js', '/session-info.js', '/submissions.js', '/text.js']) {
+  for (const path of ['/images.js', '/image-limits.js', '/paths.js', '/session-info.js', '/submissions.js', '/text.js', '/commands.js']) {
     const script = await get(path);
     assert.equal(script.status, 200);
     assert.match(script.headers.get('content-type'), /javascript/);

@@ -77,6 +77,16 @@ context values are safe integers with a positive window and nonnegative usage. U
 billing totals. Older adapters may omit both fields. Registration, live state events, snapshots,
 and the session list use the same validated projection, excluding arbitrary model configuration.
 
+Snapshots may include `commands: [{ name, description, source }]`, with source `skill` or `prompt`.
+Only commands loaded in that session are exposed, using Pi's native `getCommands()` ordering;
+extension commands suppress same-named templates or skills. Discovery is bounded to 128 entries,
+names to 100 characters, and descriptions to 240 characters. Provenance paths and resource contents
+are not included. Older adapters may omit the catalog. Browser completion only inserts text; it
+never sends or expands locally. Native expansion is enabled only for a currently approved skill or
+prompt command, not arbitrary slash commands, because expansion also enables extension dispatch.
+Trusted native input hooks still apply. Commands use the ordinary generation-bound submission,
+deduplication, image, and delivery-mode rules; resource expansion does not establish execution.
+
 Browser steering receipts are private, bounded, in-memory UI feedback, not additional Pi messages.
 They distinguish submitting, submitted, rejected, and uncertain delivery. A matching later live
 user message may replace a visual receipt, but matching content does not establish execution or

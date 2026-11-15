@@ -103,3 +103,43 @@ test('broker rejects malformed optional metadata on registration and state event
   await once(socket, 'close');
   await until(() => broker.size === 0);
 });
+
+test('snapshot commands are optional, bounded, and stripped of private native provenance', async t => {
+  const { broker, connect } = await fixture(t);
+  const socket = await connect(base);
+  await until(() => broker.size === 1);
+  let commands;
+  readFrames(socket, frame => {
+    if (frame.type === 'request') writeFrame(socket, { type: 'response', id: frame.id, ok: true,
+      result: { state: base, messages: [], ...(commands === undefined ? {} : { commands }) } });
+  });
+  assert.equal(Object.hasOwn(await broker.request('main', 'snapshot', {}), 'commands'), false);
+  commands = [{ name: 'review', description: 'Review changes', source: 'prompt',
+    sourceInfo: { path: 'SECRET' }, content: 'SECRET' },
+  { name: 'skill:check', description: '', source: 'skill', template: 'SECRET' }];
+  const snapshot = await broker.request('main', 'snapshot', {});
+  assert.deepEqual(snapshot.commands, [
+    { name: 'review', description: 'Review changes', source: 'prompt' },
+    { name: 'skill:check', description: '', source: 'skill' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(snapshot), /SECRET/);
+});
+
+test('broker fails closed on malformed or executable-extension snapshot catalogs', async t => {
+  const { broker, connect } = await fixture(t);
+  const valid = { name: 'review', description: 'Review', source: 'prompt' };
+  for (const commands of [null, {}, [null], [{ ...valid, source: 'extension' }],
+    [{ ...valid, name: '/review' }], [{ ...valid, name: 'bad name' }],
+    [{ ...valid, name: 'x'.repeat(101) }], [{ ...valid, source: 'skill' }],
+    [{ ...valid, description: 'x'.repeat(241) }], [{ ...valid, description: 'bad\nvalue' }],
+    [valid, valid], Array.from({ length: 129 }, (_, i) => ({ ...valid, name: `p${i}` }))]) {
+    const socket = await connect(base);
+    await until(() => broker.size === 1);
+    readFrames(socket, frame => {
+      if (frame.type === 'request') writeFrame(socket, { type: 'response', id: frame.id, ok: true,
+        result: { state: base, messages: [], commands } });
+    });
+    await assert.rejects(broker.request('main', 'snapshot', {}), { code: 'disconnected' });
+    await until(() => broker.size === 0);
+  }
+});

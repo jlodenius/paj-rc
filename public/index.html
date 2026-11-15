@@ -60,7 +60,8 @@
         <input id="photo-camera" type="file" accept="image/*" capture="environment" hidden>
         <div id="photo-previews" class="photo-previews" aria-label="Attached photos" hidden></div>
         <label for="prompt" class="sr-only">Message to selected session</label>
-        <textarea id="prompt" placeholder="Send an instruction…" rows="3" maxlength="16000" disabled></textarea>
+        <textarea id="prompt" placeholder="Send an instruction…" rows="3" maxlength="16000" aria-autocomplete="list" aria-controls="command-completions" disabled></textarea>
+        <div id="command-completions" class="command-completions" role="listbox" aria-label="Skills and prompt templates" hidden></div>
         <div class="composer-actions">
           <div class="send-actions">
             <button id="stop" type="button" class="quiet" aria-label="Stop current run" disabled>Stop</button>

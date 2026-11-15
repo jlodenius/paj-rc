@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const origin = 'https://remote.example';
 const shell = [
-  '/', '/app.js', '/state.js', '/paths.js', '/session-info.js', '/submissions.js', '/text.js',
+  '/', '/app.js', '/state.js', '/paths.js', '/session-info.js', '/submissions.js', '/text.js', '/commands.js',
   '/markdown.js', '/images.js', '/image-limits.js',
   '/style.css', '/manifest.webmanifest',
   '/fonts/fira-code-latin.woff2', '/fonts/space-grotesk-latin.woff2',
