@@ -14,6 +14,9 @@ const assets = new Map([
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/state.js', ['state.js', 'text/javascript; charset=utf-8']],
   ['/paths.js', ['paths.js', 'text/javascript; charset=utf-8']],
+  ['/session-info.js', ['session-info.js', 'text/javascript; charset=utf-8']],
+  ['/submissions.js', ['submissions.js', 'text/javascript; charset=utf-8']],
+  ['/text.js', ['text.js', 'text/javascript; charset=utf-8']],
   ['/markdown.js', ['markdown.js', 'text/javascript; charset=utf-8']],
   ['/images.js', ['images.js', 'text/javascript; charset=utf-8']],
   ['/image-limits.js', ['image-limits.js', 'text/javascript; charset=utf-8']],
@@ -26,6 +29,7 @@ const assets = new Map([
   ['/sw.js', ['sw.js', 'text/javascript; charset=utf-8']],
   ['/icons/icon-192.png', ['icons/icon-192.png', 'image/png']],
   ['/icons/icon-512.png', ['icons/icon-512.png', 'image/png']],
+  ['/icons/icon-maskable-512.png', ['icons/icon-maskable-512.png', 'image/png']],
   ['/icons/apple-touch-icon.png', ['icons/apple-touch-icon.png', 'image/png']],
 ]);
 

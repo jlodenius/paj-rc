@@ -42,7 +42,7 @@
     <main class="conversation">
       <header class="conversation-header">
         <div class="back-row"><button id="back" class="quiet back" aria-label="Back to sessions"><span class="back-slash" aria-hidden="true">/</span><span>sessions</span></button></div>
-        <div class="heading"><h2 id="session-name">Choose a session</h2><p id="session-context">Your live workspace</p></div>
+        <div class="heading"><h2 id="session-name">Choose a session</h2><p id="session-context">Your live workspace</p><div id="session-metadata" hidden></div></div>
       </header>
       <div id="notice" class="notice" role="status" hidden></div>
       <div id="transcript" class="transcript" tabindex="0" aria-label="Conversation">
@@ -54,7 +54,7 @@
         <div class="photo-toolbar">
           <button id="attach-photo" type="button" class="quiet" disabled>+ photo</button>
           <button id="take-photo" type="button" class="quiet" disabled>camera</button>
-          <span id="photo-status" class="photo-status" role="status">Up to 3 photos</span>
+          <span id="photo-status" class="photo-status" role="status"></span>
         </div>
         <input id="photo-library" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple hidden>
         <input id="photo-camera" type="file" accept="image/*" capture="environment" hidden>

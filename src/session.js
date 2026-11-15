@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { validateImages, hashImages } from './images.js';
+import { boundedMessageText as boundedText, MESSAGE_TEXT_LIMIT as TEXT_LIMIT } from '../public/text.js';
 
-const TEXT_LIMIT = 8192;
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 
 export function isEligible(ctx, snapshot, { env = process.env, pid = process.pid } = {}) {
@@ -14,14 +14,6 @@ export function isEligible(ctx, snapshot, { env = process.env, pid = process.pid
     !env.PAJ_PARENT_PI_SESSION_ID &&
     !env.PAJ_SPAWN_ID && !env.PAJ_TASK_ID && !env.PAJ_PARENT_TASK_ID &&
     (!env.PAJ_ROLE || env.PAJ_ROLE === 'primary');
-}
-
-function boundedText(value) {
-  let text = value.slice(0, TEXT_LIMIT);
-  while (Buffer.byteLength(JSON.stringify(text)) > TEXT_LIMIT + 2) {
-    text = text.slice(0, Math.floor(text.length * 0.75));
-  }
-  return text;
 }
 
 function textContent(content) {
@@ -54,6 +46,27 @@ export function projectMessage(message, id) {
       ? { customType: 'paj-messages' } : {}) } : null;
 }
 
+function modelMetadata(model) {
+  const result = {};
+  for (const key of ['id', 'provider', 'name']) {
+    const value = model?.[key];
+    if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f\u007f]/u.test(value)) return null;
+    result[key] = value.slice(0, 200);
+  }
+  return result;
+}
+
+function contextMetadata(ctx) {
+  try {
+    const usage = ctx.getContextUsage?.();
+    if (!Number.isSafeInteger(usage?.contextWindow) || usage.contextWindow <= 0) return null;
+    return { tokens: Number.isSafeInteger(usage.tokens) && usage.tokens >= 0 ? usage.tokens : null,
+      contextWindow: usage.contextWindow };
+  } catch {
+    return null;
+  }
+}
+
 export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = process.pid,
   uuid = randomUUID, dedupLimit = 512 }) {
   const sessionId = ctx.sessionManager.getSessionId();
@@ -72,6 +85,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
   let partial = null;
   let finalized = [];
   let reconcileImmediate;
+  let metadataImmediate;
   let reconcileTimer;
   let reconcileDelay = 25;
 
@@ -84,13 +98,24 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
   const state = () => ({ busy: !ctx.isIdle() || leases.size > 0,
     runId, editorBusy: Boolean(paj.getSnapshot().editorBusy),
     terminalRequired: terminalDepth > 0,
-    supportsImages: Array.isArray(modelCtx.model?.input) && modelCtx.model.input.includes('image') });
+    supportsImages: Array.isArray(modelCtx.model?.input) && modelCtx.model.input.includes('image'),
+    model: modelMetadata(modelCtx.model), context: contextMetadata(modelCtx) });
   const emit = (event) => {
     if (!eligible()) return;
     const frame = { type: 'event', seq: ++seq, event };
     for (const listener of listeners) {
       try { listener(frame); } catch { /* Transport errors cannot break the Pi event path. */ }
     }
+  };
+  const refreshState = () => emit({ type: 'state', state: state() });
+  const deferState = () => {
+    if (metadataImmediate) return;
+    const previous = JSON.stringify(state());
+    metadataImmediate = setImmediate(() => {
+      metadataImmediate = undefined;
+      if (eligible() && JSON.stringify(state()) !== previous) refreshState();
+    });
+    metadataImmediate.unref?.();
   };
   const entryMessage = (entry) => entry.type === 'message' ? entry.message
     : entry.type === 'custom_message' ? { ...entry, role: 'custom' } : null;
@@ -136,7 +161,10 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     reconcileImmediate = undefined;
     reconcileTimer = undefined;
     if (!eligible()) return;
-    if (reconcileFinalized()) emit({ type: 'reset' });
+    if (reconcileFinalized()) {
+      refreshState();
+      emit({ type: 'reset' });
+    }
     if (!finalized.length) return;
     reconcileTimer = setTimeout(observePersistence, reconcileDelay);
     reconcileTimer.unref?.();
@@ -150,6 +178,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
   const on = (name, handler) => {
     const unsubscribe = pi.on(name, (event, currentCtx) => {
       if (!eligible() || currentCtx?.sessionManager.getSessionId() !== sessionId) return;
+      modelCtx = currentCtx;
       handler(event, currentCtx);
     });
     if (typeof unsubscribe === 'function') unsubscribers.push(unsubscribe);
@@ -168,12 +197,19 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     releaseLeases();
     runId = null;
     emit({ type: 'state', state: state() });
+    deferState();
     emit({ type: 'reset' });
   });
-  on('model_select', (event, currentCtx) => {
-    modelCtx = currentCtx;
-    emit({ type: 'state', state: state() });
+  on('model_select', () => {
+    refreshState();
+    deferState();
   });
+  for (const name of ['turn_end', 'agent_end']) {
+    on(name, () => {
+      refreshState();
+      deferState();
+    });
+  }
   on('ui_prompt_start', () => {
     terminalDepth++;
     emit({ type: 'state', state: state() });
@@ -194,6 +230,8 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     if (text) emit({ type: 'delta', messageId: partial.id, text });
   });
   on('message_end', (event) => {
+    refreshState();
+    deferState();
     const message = projectMessage(event.message,
       event.message.role === 'assistant' && partial ? partial.id : uuid());
     if (message) {
@@ -217,11 +255,15 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
       cancelReconciliation();
       finalized = [];
       partial = null;
+      refreshState();
+      deferState();
       emit({ type: 'reset' });
     });
   }
   on('session_compact_failed', () => {
     reconcileFinalized();
+    refreshState();
+    deferState();
     emit({ type: 'reset' });
   });
   on('tool_execution_start', (event) => {
@@ -340,6 +382,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
       if (closed) return;
       closed = true;
       cancelReconciliation();
+      clearImmediate(metadataImmediate);
       finalized = [];
       partial = null;
       for (const unsubscribe of unsubscribers) unsubscribe();

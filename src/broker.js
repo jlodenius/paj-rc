@@ -16,7 +16,35 @@ function state(value) {
       typeof value.terminalRequired !== 'boolean' ||
       (value.supportsImages !== undefined && typeof value.supportsImages !== 'boolean') ||
       !(value.runId === null || typeof value.runId === 'string')) throw new Error('Invalid session state');
+  let model;
+  if (value.model !== undefined) {
+    model = null;
+    if (value.model !== null) {
+      if (typeof value.model !== 'object' || Array.isArray(value.model)) throw new Error('Invalid session model');
+      model = {};
+      for (const key of ['id', 'provider', 'name']) {
+        const text = value.model?.[key];
+        if (typeof text !== 'string' || !text.trim() || text.length > 200 ||
+            /[\u0000-\u001f\u007f]/u.test(text)) throw new Error('Invalid session model');
+        model[key] = text;
+      }
+    }
+  }
+  let context;
+  if (value.context !== undefined) {
+    context = null;
+    if (value.context !== null) {
+      if (typeof value.context !== 'object' || Array.isArray(value.context)) throw new Error('Invalid session context');
+      const { tokens, contextWindow } = value.context;
+      if (!Number.isSafeInteger(contextWindow) || contextWindow <= 0 ||
+          !(tokens === null || (Number.isSafeInteger(tokens) && tokens >= 0))) {
+        throw new Error('Invalid session context');
+      }
+      context = { tokens, contextWindow };
+    }
+  }
   return { busy: value.busy, editorBusy: value.editorBusy, terminalRequired: value.terminalRequired,
+    ...(model !== undefined ? { model } : {}), ...(context !== undefined ? { context } : {}),
     runId: value.runId,
     ...(typeof value.supportsImages === 'boolean' ? { supportsImages: value.supportsImages } : {}) };
 }
@@ -104,9 +132,14 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
       if (frame.type === 'response') {
         const pending = endpoint.pending.get(frame.id);
         if (!pending) return;
+        let result = frame.result;
+        if (frame.ok === true && pending.method === 'snapshot') {
+          result = { ...result, state: state(result?.state) };
+          endpoint.state = result.state;
+        }
         endpoint.pending.delete(frame.id);
         clearTimeout(pending.timer);
-        if (frame.ok === true) pending.resolve(frame.result);
+        if (frame.ok === true) pending.resolve(result);
         else pending.reject(new RemoteError(String(frame.error?.code ?? 'session_error').slice(0, 100),
           String(frame.error?.message ?? 'Session request failed').slice(0, 1000)));
         return;
@@ -115,7 +148,10 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
           !frame.event || !['state', 'message', 'delta', 'reset'].includes(frame.event.type)) {
         throw new Error('Invalid session event');
       }
-      if (frame.event.type === 'state') endpoint.state = state(frame.event.state);
+      if (frame.event.type === 'state') {
+        endpoint.state = state(frame.event.state);
+        frame.event = { type: 'state', state: endpoint.state };
+      }
       if (frame.seq !== endpoint.seq + 1 && endpoint.seq !== 0) onEvent('resync', {});
       endpoint.seq = frame.seq;
       onEvent('session', { id: endpoint.identity.id, generation: endpoint.generation,
@@ -185,7 +221,7 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
           reject(new RemoteError('timeout', method === 'snapshot' ? 'Session did not respond' :
             'Write outcome is unknown; check the conversation before retrying', 504));
         }, requestTimeoutMs);
-        endpoint.pending.set(requestId, { resolve, reject, timer });
+        endpoint.pending.set(requestId, { resolve, reject, timer, method });
         try {
           writeFrame(endpoint.socket, { type: 'request', id: requestId, method,
             params: { ...params, generation: endpoint.generation } });

@@ -130,6 +130,10 @@ h6::before { content: '###### '; }
 .session-card[aria-current="true"] { background: var(--selected); border-left-color: var(--accent); }
 .session-title { max-width: 100%; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .session-project { max-width: 100%; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.agent-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; max-width: 100%; color: var(--muted); font-size: 10px; }
+.agent-model { min-width: 0; max-width: 100%; color: var(--text); overflow-wrap: anywhere; }
+.agent-context { white-space: nowrap; }
+.heading .agent-meta { margin-top: 9px; font-size: 11px; }
 .session-separator { color: var(--accent); }
 .path-measure { position: absolute; visibility: hidden; white-space: pre; pointer-events: none; }
 .session-detail { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
@@ -173,6 +177,8 @@ h6::before { content: '###### '; }
 .message > .message-role::before { content: '> '; color: var(--accent); }
 .message-text { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; }
 .message.user { padding: 18px 20px; border: 1px solid var(--line); border-left: 2px solid var(--accent); background: var(--surface); }
+.message.user.steering { border-left-color: var(--muted); background: var(--bg); color: var(--muted); }
+.message.steering > .message-role { color: var(--accent); }
 .message.tool { padding: 2px 0 2px 18px; border-left: 2px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.7; }
 .message.tool .message-text { max-height: 280px; overflow-y: auto; scrollbar-width: thin; }
 .message.paj { padding: 20px; border: 1px solid var(--paj-border); border-left-width: 3px; background: var(--paj-bg); color: var(--paj-text); }
@@ -213,7 +219,7 @@ h6::before { content: '###### '; }
   scrollbar-width: thin;
 }
 .working-indicator { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 9px; min-height: 24px; margin: 0 0 10px; background: var(--bg); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.working-spinner { display: block; flex: 0 0 1em; width: 1em; height: 1.25em; overflow: hidden; color: var(--accent); text-align: center; font: 18px/1.25 var(--mono); }
+.working-spinner { display: block; flex: 0 0 1em; width: 1em; height: 24px; overflow: hidden; color: var(--accent); text-align: center; font: 18px/24px var(--mono); }
 .working-spinner-frames { display: block; white-space: pre; }
 @keyframes terminal-spin {
   from { transform: translateY(0); }

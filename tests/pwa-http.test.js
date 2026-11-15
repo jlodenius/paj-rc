@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { inflateSync } from 'node:zlib';
 import { startDaemon } from '../src/daemon.js';
 
 async function setup(t, options = {}) {
@@ -31,6 +32,26 @@ test('installable app exposes a scoped manifest, worker, PNG icons, and steering
   assert.equal(manifest.start_url, '/');
   assert.equal(manifest.scope, '/');
   assert.equal(manifest.display, 'standalone');
+  assert.equal(manifest.background_color, '#000000');
+  const maskable = manifest.icons.find(icon => icon.purpose === 'maskable');
+  assert.ok(maskable);
+  assert.equal(maskable.sizes, '512x512');
+  for (const path of [...manifest.icons.map(icon => icon.src), '/icons/apple-touch-icon.png']) {
+    const response = await get(path);
+    assert.equal(response.status, 200);
+    const png = Buffer.from(await response.arrayBuffer());
+    assert.equal(png[24], 8);
+    assert.ok([2, 6].includes(png[25]));
+    const chunks = [];
+    for (let offset = 8; offset < png.length;) {
+      const size = png.readUInt32BE(offset);
+      if (png.toString('ascii', offset + 4, offset + 8) === 'IDAT') chunks.push(png.subarray(offset + 8, offset + 8 + size));
+      offset += size + 12;
+    }
+    const firstRow = inflateSync(Buffer.concat(chunks));
+    assert.deepEqual([...firstRow.subarray(1, 4)], [0, 0, 0], `${path} must have black edge pixels`);
+    if (png[25] === 6) assert.equal(firstRow[4], 255, `${path} must have opaque background pixels`);
+  }
   for (const size of [192, 512]) {
     const icon = manifest.icons.find(value => value.sizes === `${size}x${size}`);
     assert.ok(icon);
@@ -55,7 +76,7 @@ test('installable app exposes a scoped manifest, worker, PNG icons, and steering
     const response = await get(`/fonts/${font}-OFL.txt`);
     assert.match(await response.text(), /SIL OPEN FONT LICENSE/);
   }
-  for (const path of ['/images.js', '/image-limits.js', '/paths.js']) {
+  for (const path of ['/images.js', '/image-limits.js', '/paths.js', '/session-info.js', '/submissions.js', '/text.js']) {
     const script = await get(path);
     assert.equal(script.status, 200);
     assert.match(script.headers.get('content-type'), /javascript/);

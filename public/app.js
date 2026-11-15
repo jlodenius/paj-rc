@@ -3,6 +3,8 @@ import { renderMarkdown } from './markdown.js';
 import { prepareImage } from './images.js';
 import { MAX_IMAGES } from './image-limits.js';
 import { compactProjectPath } from './paths.js';
+import { sessionInfo } from './session-info.js';
+import { createSubmissionFeedback, steeringLabel } from './submissions.js';
 
 if (globalThis.isSecureContext && globalThis.navigator?.serviceWorker) {
   navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' }).catch(() => {});
@@ -49,6 +51,8 @@ let photoRevision = 0;
 let removePhotoButtons = [];
 let projectPaths = [];
 let headerPath;
+const submissionFeedback = createSubmissionFeedback();
+const feedbackScope = (id, generation) => `${id}:${generation}`;
 
 function fitProjectPaths() {
   for (const entry of [...projectPaths, ...(headerPath ? [headerPath] : [])]) {
@@ -123,14 +127,9 @@ function renderPhotos() {
 }
 
 async function selectPhotos(event) {
-  const files = Array.from(event.target.files || []);
+  const files = Array.from(event.target.files || []).slice(0, Math.max(0, MAX_IMAGES - photos.length));
   event.target.value = '';
   if (!files.length || preparingPhotos || sending || !selected || !authenticated) return;
-  if (files.length + photos.length > MAX_IMAGES) {
-    photoError = `Attach up to ${MAX_IMAGES} photos per message.`;
-    renderControls();
-    return;
-  }
   const revision = ++photoRevision;
   const version = selectionVersion;
   preparingPhotos = true;
@@ -170,7 +169,7 @@ function renderPhotoControls() {
   const message = photoError || (preparingPhotos ? 'Preparing photos…'
     : selected && !supported ? !imageUploads ? 'Update the service to enable photos.'
       : state?.supportsImages === false ? 'This model does not support photos.' : 'Reload Pi to enable photos.'
-      : photos.length ? `${photos.length}/${MAX_IMAGES} photos attached` : `Up to ${MAX_IMAGES} photos`);
+      : photos.length ? `${photos.length} photo${photos.length === 1 ? '' : 's'} attached` : '');
   if ($('photo-status').textContent !== message) $('photo-status').textContent = message;
   $('photo-status').setAttribute('data-error', String(Boolean(photoError)));
 }
@@ -219,6 +218,7 @@ function connectionWarning(message = '') {
 
 function showLogin() {
   clearPhotos();
+  submissionFeedback.clear();
   authenticated = false;
   imageUploads = false;
   stream?.close();
@@ -233,6 +233,7 @@ function showLogin() {
   buffer = [];
   $('messages').replaceChildren();
   $('sessions').replaceChildren();
+  renderHeader();
   $('prompt').value = '';
   $('workspace').hidden = true;
   $('login').hidden = false;
@@ -272,11 +273,13 @@ function start() {
     let envelope;
     try { envelope = JSON.parse(event.data); } catch { refreshSessions(true); return; }
     const entry = sessions.find(session => session.id === envelope.id);
-    if (entry && entry.generation === envelope.generation && envelope.event?.type === 'state' &&
-        ['busy', 'runId', 'editorBusy', 'terminalRequired', 'supportsImages'].some(key =>
-          entry.state?.[key] !== envelope.event.state?.[key])) {
-      entry.state = { ...envelope.event.state };
-      renderSessions();
+    if (entry && entry.generation === envelope.generation) {
+      submissionFeedback.observe(feedbackScope(entry.id, entry.generation), envelope);
+      if (envelope.event?.type === 'state' &&
+          JSON.stringify(entry.state) !== JSON.stringify(envelope.event.state)) {
+        entry.state = { ...envelope.event.state };
+        renderSessions();
+      }
     }
     if (envelope.id !== selected?.id) return;
     if (snapshotting) {
@@ -304,9 +307,11 @@ async function refreshSessions(resnapshot = false) {
         notice('That session is no longer available. Choose another main session.');
       } else {
         const changed = next.generation !== selected.generation;
-        if (changed) clearPhotos();
-        selected = next;
-        if (changed || resnapshot) refreshSnapshot();
+        if (changed) selectSession(next, { reveal: false });
+        else {
+          selected = next;
+          if (resnapshot) refreshSnapshot();
+        }
       }
     }
     if (connected && !selected) connectionWarning();
@@ -337,13 +342,29 @@ function renderSessions() {
     separator.className = 'session-separator';
     separator.textContent = '·';
     detail.append(separator, ` ${statusText(session.state)}`);
-    button.append(title, context, detail);
+    button.append(title, context, detail, metadataRow(session.state, session.model));
     button.onclick = () => selectSession(session);
     return button;
   });
   $('sessions').replaceChildren(...nodes);
   $('list-empty').hidden = sessions.length !== 0;
   fitProjectPaths();
+}
+
+function metadataRow(state, fallbackModel) {
+  const info = sessionInfo(state, fallbackModel);
+  const row = document.createElement('span');
+  row.className = 'agent-meta';
+  const model = document.createElement('span');
+  model.className = 'agent-model';
+  model.textContent = info.modelText;
+  model.title = info.modelTitle;
+  const context = document.createElement('span');
+  context.className = 'agent-context';
+  context.textContent = info.contextText;
+  context.title = info.contextTitle;
+  row.append(model, context);
+  return row;
 }
 
 function awaitingConfirmation(state = {}) {
@@ -357,8 +378,8 @@ function statusText(state = {}) {
   return state.busy ? 'Working' : 'Ready';
 }
 
-function selectSession(session) {
-  if (selected?.id !== session?.id) clearPhotos();
+function selectSession(session, { reveal = true } = {}) {
+  if (selected?.id !== session?.id || selected?.generation !== session?.generation) clearPhotos();
   selectionVersion++;
   selected = session;
   transcript = createTranscript();
@@ -367,7 +388,7 @@ function selectSession(session) {
   resnapshotNeeded = false;
   buffer = [];
   notice();
-  $('workspace').classList.toggle('show-conversation', Boolean(session));
+  if (reveal) $('workspace').classList.toggle('show-conversation', Boolean(session));
   renderSessions();
   renderTranscript();
   if (session) refreshSnapshot();
@@ -417,6 +438,8 @@ function renderHeader() {
   if (!selected) {
     context.textContent = 'Your live workspace';
     context.title = '';
+    $('session-metadata').replaceChildren();
+    $('session-metadata').hidden = true;
     return;
   }
   const path = document.createElement('span');
@@ -430,19 +453,28 @@ function renderHeader() {
   }
   context.replaceChildren(path, ...(branch ? [' ', branch] : []));
   headerPath = { container: context, node: path, fullPath: path.textContent, branch };
+  const metadata = $('session-metadata');
+  metadata.replaceChildren(metadataRow(transcript.generation === selected.generation ? transcript.state : selected.state, selected.model));
+  metadata.hidden = false;
   fitProjectPaths();
 }
 
 function renderTranscript() {
+  if (selected && transcript.generation === selected.generation &&
+      JSON.stringify(selected.state) !== JSON.stringify(transcript.state)) {
+    selected.state = { ...transcript.state };
+    renderSessions();
+  }
   const viewport = $('transcript');
   const nearBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 100;
-  const nodes = transcript.messages.map(message => {
+  const messages = selected ? submissionFeedback.messages(feedbackScope(selected.id, transcript.generation), transcript.messages) : transcript.messages;
+  const nodes = messages.map(message => {
     const article = document.createElement('article');
     const paj = message.role === 'assistant' && message.customType === 'paj-messages';
-    article.className = `message ${paj ? 'paj' : ['user', 'assistant', 'tool'].includes(message.role) ? message.role : 'tool'}`;
+    article.className = `message ${paj ? 'paj' : ['user', 'assistant', 'tool'].includes(message.role) ? message.role : 'tool'}${message.steering ? ' steering' : ''}`;
     const role = document.createElement('h3');
     role.className = 'message-role';
-    role.textContent = paj ? 'Paj agents' : message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Assistant' : 'Tool';
+    role.textContent = message.steering ? steeringLabel(message) : paj ? 'Paj agents' : message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Assistant' : 'Tool';
     const text = document.createElement('div');
     text.className = paj ? 'message-text markdown' : 'message-text';
     if (paj) renderMarkdown(text, message.text || '');
@@ -524,27 +556,35 @@ $('composer').onsubmit = async event => {
   const images = photos.map(photo => ({ mimeType: photo.mimeType, data: photo.data }));
   const revision = photoRevision;
   const id = selected.id;
+  const generation = transcript.generation;
+  const requestId = crypto.randomUUID();
+  const deliverAs = $('deliver-as').value;
+  const scope = feedbackScope(id, generation);
+  const steering = deliverAs === 'steer' && transcript.state.busy && Boolean(transcript.state.runId);
+  if (steering) submissionFeedback.begin(scope, { requestId, text, imageCount: images.length, seq: transcript.seq });
   sending = true;
-  renderControls();
+  renderTranscript();
   try {
     const action = images.length ? 'image-prompt' : 'prompt';
     await api(`/api/sessions/${encodeURIComponent(id)}/${action}`, {
-      generation: transcript.generation,
-      requestId: crypto.randomUUID(),
+      generation,
+      requestId,
       text,
       ...(images.length ? { images } : {}),
-      deliverAs: $('deliver-as').value,
+      deliverAs,
     });
+    if (steering) submissionFeedback.update(scope, requestId, 'submitted');
     if (version === selectionVersion) {
       if ($('prompt').value === text) $('prompt').value = '';
       if (revision === photoRevision) clearPhotos();
       notice();
     }
   } catch (error) {
+    if (steering) submissionFeedback.update(scope, requestId, error instanceof ApiError && error.status < 500 ? 'rejected' : 'unknown');
     if (version === selectionVersion) notice(error instanceof ApiError && error.status < 500
       ? `Not submitted: ${error.message}`
       : 'Delivery is uncertain. Your instruction may have reached Pi. Check the conversation before sending again; it will not be retried automatically.');
-  } finally { sending = false; renderControls(); }
+  } finally { sending = false; renderTranscript(); }
 };
 $('stop').onclick = async () => {
   if ($('stop').disabled) return;

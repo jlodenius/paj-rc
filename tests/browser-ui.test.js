@@ -53,6 +53,8 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
     addEventListener(type, callback) { this.listeners[type] = callback; }
     close() {}
   };
+  let holdPrompt = false;
+  let resolvePrompt;
   globalThis.fetch = async (url, options) => {
     requests.push({ url, options });
     let data;
@@ -61,10 +63,13 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
     else if (url.endsWith('/snapshot')) {
       assert.equal(source.url, '/api/events');
       data = await new Promise(resolve => { resolveSnapshot = resolve; });
-    } else if (url.endsWith('/prompt')) throw new TypeError('network response lost');
+    } else if (url.endsWith('/prompt')) {
+      if (!holdPrompt) throw new TypeError('network response lost');
+      data = await new Promise(resolve => { resolvePrompt = resolve; });
+    }
     else if (url.endsWith('/abort')) data = {};
     else throw new Error(`Unexpected URL: ${url}`);
-    return { ok: true, json: async () => data };
+    return { ok: true, json: async () => structuredClone(data) };
   };
   try {
     await import(`../public/app.js?test=${Date.now()}`);
@@ -132,6 +137,8 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
     assert.equal(prompt.text, 'An instruction');
     assert.ok(prompt.requestId);
     assert.match(elements.get('notice').textContent, /uncertain/);
+    assert.equal(elements.get('messages').children.at(-1).children[0].textContent, 'Steering · delivery unconfirmed');
+    assert.equal(elements.get('messages').children.at(-1).children[1].textContent, 'An instruction');
     assert.equal(elements.get('prompt').value, 'An instruction');
     await elements.get('stop').onclick();
     const abort = requests.find(request => request.url.endsWith('/abort'));
@@ -213,11 +220,46 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
       seq: 12, event: { type: 'state', state: { busy: false, runId: null,
         editorBusy: false, terminalRequired: false, supportsImages: true } } }) });
     assert.equal(elements.get('attach-photo').disabled, false);
+    holdPrompt = true;
+    elements.get('prompt').value = 'Draft for a replacement generation';
+    elements.get('prompt').oninput();
+    const pendingPrompt = elements.get('composer').onsubmit({ preventDefault() {} });
+    await settle();
+    session.generation = 'replacement-generation';
+    session.state = { busy: false, runId: null, editorBusy: false, terminalRequired: false, supportsImages: true };
+    source.listeners.sessions();
+    await settle();
+    resolveSnapshot({ generation: session.generation, seq: 0, state: session.state, messages: [], hasMore: false });
+    await settle();
+    elements.get('notice').textContent = 'Replacement generation notice';
+    resolvePrompt({ status: 'submitted' });
+    await pendingPrompt;
+    assert.equal(elements.get('prompt').value, 'Draft for a replacement generation');
+    assert.equal(elements.get('notice').textContent, 'Replacement generation notice');
+    elements.get('refresh').onclick();
+    await settle();
+    const oldSnapshot = resolveSnapshot;
+    const snapshotRequests = requests.filter(request => request.url.endsWith('/snapshot')).length;
+    session.generation = 'latest-generation';
+    source.listeners.sessions();
+    await settle();
+    assert.equal(requests.filter(request => request.url.endsWith('/snapshot')).length, snapshotRequests + 1,
+      'A generation change must start a replacement snapshot even while the old snapshot is pending');
+    oldSnapshot({ generation: 'replacement-generation', seq: 0, state: session.state, messages: [], hasMore: false });
+    resolveSnapshot({ generation: session.generation, seq: 0, state: session.state, messages: [], hasMore: false });
+    await settle();
+    assert.equal(elements.get('send').disabled, false, 'Replacement snapshot must recover composer controls');
     imageUploads = false;
     source.listeners.sessions();
     await settle();
     assert.equal(elements.get('attach-photo').disabled, true);
     assert.match(elements.get('photo-status').textContent, /Update the service/);
+    elements.get('sessions').children[1].onclick();
+    await settle();
+    resolveSnapshot({ generation: 'other-generation', seq: 0, state: other.state, messages: [], hasMore: false });
+    await settle();
+    assert.equal(elements.get('messages').children.length, 0, 'Steering receipts must not leak into another session');
+    assert.equal(requests.filter(request => request.url.endsWith('/prompt')).length, 3);
   } finally {
     for (const [key, value] of Object.entries(globals)) {
       if (value === undefined) delete globalThis[key];

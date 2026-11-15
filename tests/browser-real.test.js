@@ -28,8 +28,11 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
     branch: 'feature/mobile-layout', role: 'primary', parentPiSessionId: null };
   const config = { port: 0, allowedOrigins: [], idleTimeoutMs: 60000,
     pairingKey: randomBytes(32).toString('base64url') };
-  const state = { busy: false, runId: null, editorBusy: false, terminalRequired: false, supportsImages: true };
+  const state = { busy: false, runId: null, editorBusy: false, terminalRequired: false, supportsImages: true,
+    model: { id: 'gpt-6.1-sol', provider: 'openai-codex', name: 'GPT 6.1 Sol' },
+    context: { tokens: 200000, contextWindow: 500000 } };
   const submissions = [];
+  const nativeSteers = [];
   const listeners = new Set();
   let seq = 0;
   let snapshots = 0;
@@ -40,12 +43,14 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   const adapter = { identity, generation: randomUUID(), eligible: () => true, state: () => state,
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     snapshot() { snapshots++; return { sessionId: identity.piSessionId, generation: this.generation, seq, state,
-      messages: [{ id: 'older-user', role: 'user', text: 'Review the earlier changes' },
+      messages: [
+        { id: 'older-user', role: 'user', text: 'Review the earlier changes' },
         { id: 'm1', role: 'assistant', text: '<img src=x onerror=alert(1)> Safe text' },
         { id: 'latest-user', role: 'user', text: 'Check the latest changes' },
         { id: 'paj', role: 'assistant', customType: 'paj-messages',
-          text: '## Agent review\n\n**All checks passed.**\n\n- Updated `src/app.js`\n- Preserved your changes\n\n```js\nconst safe = true;\n```\n\n<img src=x onerror=alert(1)>\n\n[Unsafe](javascript:alert(1))' }],
-      hasMore: false, before: null }; },
+          text: '## Agent review\n\n**All checks passed.**\n\n- Updated `src/app.js`\n- Preserved your changes\n\n```js\nconst safe = true;\n```\n\n<img src=x onerror=alert(1)>\n\n[Unsafe](javascript:alert(1))' },
+        ...nativeSteers,
+      ], hasMore: false, before: null }; },
     prompt(params) { submissions.push(params); return { status: 'submitted', requestId: params.requestId }; } };
   let daemon = await startDaemon(config, { paths, listSessions: async () => [identity] });
   const connector = createConnector({ adapter, socketPath: paths.socketPath, ensureService: async () => true });
@@ -107,8 +112,22 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   assert.deepEqual(installability.installabilityErrors, []);
   await evaluate(`document.querySelector('#key').value = ${JSON.stringify(config.pairingKey)}; document.querySelector('#login-form').requestSubmit(); true`);
   await until(() => evaluate('document.querySelectorAll(".session-card").length === 1'));
+  assert.equal(await evaluate('document.querySelector(".session-card .agent-model").textContent'), 'gpt-6.1-sol');
+  assert.equal(await evaluate('document.querySelector(".session-card .agent-context").textContent'), 'context: 200k/500k');
+  state.model = { id: 'gpt-6-astra', provider: 'openai-codex', name: 'GPT 6 Astra' };
+  emit({ type: 'state', state: { ...state } });
+  await until(() => evaluate('document.querySelector(".session-card .agent-model").textContent === "gpt-6-astra"'));
   await evaluate('document.querySelector(".session-card").click(); true');
   await until(() => evaluate('!document.querySelector("#prompt").disabled && document.querySelector(".message.paj")'));
+  assert.equal(await evaluate('document.querySelector("#session-metadata .agent-model").textContent'), 'gpt-6-astra');
+  assert.equal(await evaluate('document.querySelector("#session-metadata .agent-context").textContent'), 'context: 200k/500k');
+  state.context = { tokens: null, contextWindow: 500000 };
+  emit({ type: 'state', state: { ...state } });
+  await until(() => evaluate('document.querySelector("#session-metadata .agent-context").textContent === "context: —/500k"'));
+  state.context = { tokens: 200000, contextWindow: 500000 };
+  emit({ type: 'state', state: { ...state } });
+  await until(() => evaluate('document.querySelector("#session-metadata .agent-context").textContent === "context: 200k/500k"'));
+  assert.equal(await evaluate('document.querySelector("#photo-status").textContent'), '');
   assert.equal(await evaluate('document.querySelector("#messages").textContent.includes("<img src=x")'), true);
   assert.equal(await evaluate('document.querySelectorAll("#messages img").length'), 0);
   assert.equal(await evaluate('document.querySelector("#back").textContent'), '/sessions');
@@ -195,6 +214,8 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
     assert.equal(layout.branch, identity.branch);
     assert.equal(layout.fits, true);
     assert.equal(layout.clipped, false);
+    assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
+    assert.equal(await evaluate('document.querySelector("#session-metadata").scrollWidth <= document.querySelector(".heading").clientWidth + 1'), true);
   }
   await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   assert.equal(await evaluate('document.querySelector("#working-indicator").hidden'), true);
@@ -285,6 +306,18 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   Object.assign(state, { busy: true, runId: 'steering-run' });
   emit({ type: 'state', state: { ...state } });
   await until(() => evaluate('!document.querySelector("#stop").disabled'));
+  await evaluate(`(() => {
+    const originalFetch = window.fetch;
+    window.holdSteeringResponse = true;
+    window.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      if (window.holdSteeringResponse && String(args[0]).endsWith('/prompt')) {
+        window.holdSteeringResponse = false;
+        await new Promise(resolve => { window.releaseSteeringResponse = resolve; });
+      }
+      return response;
+    };
+  })()`);
   for (const [index, text] of ['First steer', 'Second steer'].entries()) {
     await evaluate(`(() => {
       const input = document.querySelector('#prompt');
@@ -293,10 +326,23 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
       input.form.requestSubmit();
     })()`);
     await until(() => submissions.length === index + 2);
+    if (index === 0) {
+      assert.equal(await evaluate('document.querySelector(".message.steering .message-role").textContent'), 'Steering · submitting…');
+      assert.equal(await evaluate('document.querySelector(".message.steering .message-text").textContent'), text);
+      await until(() => evaluate('typeof window.releaseSteeringResponse === "function"'));
+      await evaluate('window.releaseSteeringResponse(); true');
+    }
     await until(() => evaluate('document.querySelector("#prompt").value === ""'));
+    assert.equal(await evaluate('document.querySelectorAll(".message.steering").length'), index + 1);
+    assert.equal(await evaluate('document.querySelectorAll(".message.steering .message-role")[0].textContent'), 'Steering · submitted');
     assert.equal(submissions[index + 1].text, text);
     assert.equal(submissions[index + 1].deliverAs, 'steer');
   }
+  nativeSteers.push({ id: 'native-steer-one', role: 'user', text: 'First steer' });
+  emit({ type: 'message', message: nativeSteers[0] });
+  await until(() => evaluate('[...document.querySelectorAll(".message.steering .message-role")].some(node => node.textContent === "Steering")'));
+  assert.equal(await evaluate('[...document.querySelectorAll(".message-text")].filter(node => node.textContent === "First steer").length'), 1);
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".message.steering")).color !== getComputedStyle(document.querySelector(".message.user:not(.steering)")).color'), true);
   Object.assign(state, { busy: false, runId: null });
   emit({ type: 'state', state: { ...state } });
   await until(() => evaluate('document.querySelector("#working-indicator").hidden'));
@@ -328,6 +374,19 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   assert.equal(await evaluate('[...document.querySelectorAll(".photo-preview img")].every(image => image.src.startsWith("blob:"))'), true);
   assert.equal(await evaluate('document.querySelector("#photo-camera").getAttribute("capture")'), 'environment');
   assert.equal(await evaluate('document.querySelector("#send").disabled'), false);
+  assert.equal(await evaluate('document.querySelector("#photo-status").textContent.includes("Up to")'), false);
+  await evaluate(`(() => {
+    const transfer = new DataTransfer();
+    for (const file of window.testPhotos) transfer.items.add(file);
+    const picker = document.querySelector('#photo-library'); picker.files = transfer.files;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await until(() => evaluate('document.querySelectorAll(".photo-preview img").length === 3'), 10000);
+  assert.equal(await evaluate('document.querySelector("#attach-photo").disabled && document.querySelector("#take-photo").disabled'), true);
+  assert.equal(await evaluate('document.querySelector("#photo-status").textContent'), '3 photos attached');
+  await evaluate('[...document.querySelectorAll(".photo-remove")].at(-1).click(); true');
+  assert.equal(await evaluate('document.querySelectorAll(".photo-preview img").length'), 2);
+  assert.equal(await evaluate('document.querySelector("#attach-photo").disabled'), false);
   const photoScreenshot = process.env.PAJ_RC_PHOTO_SCREENSHOT;
   if (photoScreenshot) {
     const shot = await call('Page.captureScreenshot', { format: 'png' });

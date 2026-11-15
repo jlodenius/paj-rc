@@ -453,3 +453,61 @@ test('user image projections retain bounded counts and placeholders but never im
   assert.doesNotMatch(JSON.stringify([snapshot, h.emitted]), /SECRET/);
   h.adapter.close();
 });
+
+
+test('live metadata whitelists model and preserves known, unknown and zero context usage', () => {
+  const h = harness();
+  h.ctx.model = { id: 'model', provider: 'provider', name: 'Model', apiKey: 'SECRET' };
+  let usage = { tokens: 0, contextWindow: 200000, payload: 'SECRET' };
+  h.ctx.getContextUsage = () => usage;
+  assert.deepEqual(h.adapter.state().model, { id: 'model', provider: 'provider', name: 'Model' });
+  for (const tokens of [0, 123, null, undefined, -1, 1.5, Infinity, NaN, '12', Number.MAX_SAFE_INTEGER + 1]) {
+    usage = { tokens, contextWindow: 200000 };
+    assert.deepEqual(h.adapter.state().context, { tokens: tokens === 0 || tokens === 123 ? tokens : null,
+      contextWindow: 200000 });
+  }
+  for (const contextWindow of [undefined, 0, -1, 1.5, Infinity, NaN, '200000', Number.MAX_SAFE_INTEGER + 1]) {
+    usage = { tokens: 12, contextWindow };
+    assert.equal(h.adapter.state().context, null);
+  }
+  usage = null;
+  assert.equal(h.adapter.state().context, null);
+  h.ctx.getContextUsage = () => { throw new Error('SECRET'); };
+  assert.equal(h.adapter.state().context, null);
+  assert.doesNotMatch(JSON.stringify(h.adapter.snapshot(h.params())), /SECRET/);
+  for (const name of ['', 'bad\nname', null, {}]) {
+    h.ctx.model.name = name;
+    assert.equal(h.adapter.state().model, null);
+  }
+  h.ctx.model.name = 'x'.repeat(300);
+  assert.equal(h.adapter.state().model.name.length, 200);
+  h.adapter.close();
+});
+
+test('completion and reset events use current contexts and defer usage until persistence', async () => {
+  const h = harness();
+  let usage = { tokens: 10, contextWindow: 1000 };
+  const current = { ...h.ctx, model: { id: 'new', provider: 'new-provider', name: 'New' },
+    getContextUsage: () => usage };
+  h.event('model_select', {}, current);
+  assert.equal(h.emitted.at(-1).event.state.model.id, 'new');
+  h.event('message_end', { message: { role: 'assistant', content: 'Done' } }, current);
+  usage = { tokens: 99, contextWindow: 1000 };
+  await immediate();
+  assert.deepEqual(h.emitted.at(-1).event.state.context, usage);
+  for (const name of ['session_compact', 'session_tree', 'session_compact_failed', 'turn_end', 'agent_end', 'agent_settled']) {
+    const fresh = { ...current, model: { id: name, provider: 'provider', name },
+      getContextUsage: () => ({ tokens: null, contextWindow: 2000 }) };
+    h.event(name, {}, fresh);
+    assert.deepEqual(h.adapter.snapshot(h.params()).state.context, { tokens: null, contextWindow: 2000 });
+    assert.equal(h.adapter.state().model.id, name);
+    await immediate();
+  }
+  h.event('session_compact', {}, { ...current, getContextUsage: () => null });
+  assert.equal(h.adapter.state().context, null);
+  h.adapter.close();
+  const old = harness();
+  assert.equal(old.adapter.state().context, null);
+  assert.equal(old.adapter.state().model, null);
+  old.adapter.close();
+});

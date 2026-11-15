@@ -70,6 +70,19 @@ RPC timeout is 10s; no automatic retry of writes. Snapshot uses bounded latest 1
 {"sessionId":"pi-id","generation":"uuid","seq":4,"state":{"busy":false,"runId":null,"editorBusy":false,"terminalRequired":false},"messages":[{"id":"entry-id","role":"user","text":"Hi"}],"hasMore":false,"before":null}
 ```
 
+State may additionally include `model: { id, provider, name } | null` and
+`context: { tokens, contextWindow } | null`. Model strings are bounded to 200 characters;
+context values are safe integers with a positive window and nonnegative usage. Unknown usage is
+`tokens: null`, not zero. Counts come from Pi's public context-usage API and are estimates, not
+billing totals. Older adapters may omit both fields. Registration, live state events, snapshots,
+and the session list use the same validated projection, excluding arbitrary model configuration.
+
+Browser steering receipts are private, bounded, in-memory UI feedback, not additional Pi messages.
+They distinguish submitting, submitted, rejected, and uncertain delivery. A matching later live
+user message may replace a visual receipt, but matching content does not establish execution or
+resolve uncertain delivery. Receipts are never retried automatically or stored by the service
+worker; logout clears them.
+
 Snapshot messages may include one current partial assistant message. Tool messages use role `tool`.
 Visible Paj custom messages retain `role: "assistant"` with optional `customType: "paj-messages"`
 for purple-panel Markdown rendering. The marker is included in snapshots and live final messages;

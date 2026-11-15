@@ -1,10 +1,13 @@
 const CACHE_PREFIX = 'paj-remote-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v6`;
+const CACHE_NAME = `${CACHE_PREFIX}v7`;
 const SHELL_PATHS = new Set([
   '/',
   '/app.js',
   '/state.js',
   '/paths.js',
+  '/session-info.js',
+  '/submissions.js',
+  '/text.js',
   '/markdown.js',
   '/images.js',
   '/image-limits.js',
@@ -16,6 +19,7 @@ const SHELL_PATHS = new Set([
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
+  '/icons/icon-maskable-512.png',
   '/icons/apple-touch-icon.png',
 ]);
 
