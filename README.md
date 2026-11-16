@@ -68,6 +68,16 @@ Pi expands the selected skill or template, including when steering or queueing a
 commands are not offered. After updating the extension, reload it and refresh the browser to load
 command suggestions; older adapters provide none.
 
+## Safety and privacy
+
+Paired browsers control live main sessions; subagents are not exposed. Closing the browser does
+not stop work. Submitted or queued messages do not prove execution, and uncertain writes are never
+automatically retried.
+
+Only the public app shell is cached for offline use, not conversations, credentials, photos, or
+writes. Photos stay in memory in the browser; Pi and its provider handle submitted images as normal
+user input. Context counts are Pi's estimates, not billing totals.
+
 ## Remote access with Tailscale
 
 Install Tailscale on your computer and phone, and sign in to the same tailnet. Check existing
