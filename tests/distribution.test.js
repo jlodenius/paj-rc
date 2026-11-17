@@ -6,6 +6,19 @@ import { fileURLToPath } from 'node:url';
 
 const root = new URL('../', import.meta.url);
 
+test('host SDK packages remain development-only and extensions participate in typechecking', async () => {
+  const metadata = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
+  for (const name of ['@earendil-works/pi-coding-agent', 'typebox']) {
+    assert.equal(metadata.peerDependencies[name], '*');
+    assert.ok(metadata.devDependencies[name]);
+    assert.equal(metadata.dependencies?.[name], undefined);
+  }
+  assert.match(metadata.scripts.typecheck, /tsconfig\.extension\.json/);
+  const config = JSON.parse(await readFile(new URL('tsconfig.extension.json', root), 'utf8'));
+  assert.ok(config.include.includes('extensions/**/*.ts'));
+  assert.equal(config.compilerOptions.noEmit, true);
+});
+
 test('package entry points use compiled Node and browser JavaScript', async () => {
   const metadata = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
   assert.equal(metadata.bin['paj-rc'], 'dist/src/cli.js');

@@ -14,7 +14,7 @@
   },
   "scripts": {
     "build": "node scripts/build.ts",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.browser.json --noEmit",
+    "typecheck": "npm run build && tsc --noEmit && tsc -p tsconfig.browser.json --noEmit && tsc -p tsconfig.extension.json",
     "prepare": "npm run build",
     "test": "npm run build && node --test tests/*.test.js",
     "start": "node dist/src/cli.js serve"
@@ -30,10 +30,14 @@
     "remote-control"
   ],
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
       "optional": true
     }
   },
@@ -43,7 +47,9 @@
     ]
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.5.2",
     "@types/node": "^22.20.5",
+    "typebox": "^1.4.7",
     "typescript": "~5.9.3"
   }
 }

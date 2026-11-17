@@ -12,7 +12,7 @@
         pname = "paj-rc";
         version = (builtins.fromJSON (builtins.readFile ./package.json)).version;
         src = self;
-        npmDepsHash = "sha256-wbRqlQtzz8p/OlXRutNt3dFQh8Mux5e0NMj7qFpWN50=";
+        npmDepsHash = "sha256-SUNVq2LUZxwWR3CFya8b+2o21Ll7MnthpgQE5Pqvozs=";
         nativeBuildInputs = [pkgs.makeWrapper];
         npmBuildScript = "build";
         doCheck = true;
@@ -20,10 +20,13 @@
           runHook preCheck
           export HOME="$TMPDIR/home"
           mkdir -p "$HOME"
+          npm run typecheck
           node --test tests/*.test.js
           runHook postCheck
         '';
         postInstall = ''
+          test ! -e "$out/lib/node_modules/paj-rc/node_modules/@earendil-works/pi-coding-agent"
+          test ! -e "$out/lib/node_modules/paj-rc/node_modules/typebox"
           wrapProgram "$out/bin/paj-rc" \
             --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.systemd]}
         '';
