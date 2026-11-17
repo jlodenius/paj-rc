@@ -115,7 +115,7 @@ test('setup requires explicit eligible TUI confirmation and uses absolute bounde
   assert.match(h.confirmations[0][1], /not enabled at login/);
   assert.equal(h.confirmations[0][2].timeout, 60000);
   assert.deepEqual(h.executions, [{ command: process.execPath,
-    args: [fileURLToPath(new URL('../src/cli.js', import.meta.url)), 'setup', '--yes'],
+    args: [fileURLToPath(new URL('../dist/src/cli.js', import.meta.url)), 'setup', '--yes'],
     options: { timeout: 30000 } }]);
   assert.equal(isAbsolute(h.executions[0].command), true);
   assert.equal(isAbsolute(h.executions[0].args[0]), true);
@@ -188,7 +188,7 @@ test('status and settings show whitelisted values and absolute CLI guidance with
     assert.equal(message.includes('SECRET'), false);
     assert.equal(message.includes('/private/paj'), false);
     assert.equal(message.includes(process.execPath), true);
-    assert.equal(message.includes(fileURLToPath(new URL('../src/cli.js', import.meta.url))), true);
+    assert.equal(message.includes(fileURLToPath(new URL('../dist/src/cli.js', import.meta.url))), true);
     assert.equal(message.includes('Run paj-rc'), false);
   }
   assert.equal(h.executions.length, 0);

@@ -1,31 +1,21 @@
 {
   description = "Private browser control for live main Paj and Pi sessions";
-
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = {
-    self,
-    nixpkgs,
-  }: let
-    forAllSystems = nixpkgs.lib.genAttrs [
-      "aarch64-linux"
-      "x86_64-linux"
-    ];
+  outputs = { self, nixpkgs }: let
+    forAllSystems = nixpkgs.lib.genAttrs ["aarch64-linux" "x86_64-linux"];
   in {
     packages = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
     in {
-      default = pkgs.stdenvNoCC.mkDerivation {
+      default = pkgs.buildNpmPackage {
         pname = "paj-rc";
         version = (builtins.fromJSON (builtins.readFile ./package.json)).version;
         src = self;
-
+        npmDepsHash = "sha256-wbRqlQtzz8p/OlXRutNt3dFQh8Mux5e0NMj7qFpWN50=";
         nativeBuildInputs = [pkgs.makeWrapper];
-        nativeCheckInputs = [pkgs.nodejs];
-        dontConfigure = true;
-        dontBuild = true;
+        npmBuildScript = "build";
         doCheck = true;
-
         checkPhase = ''
           runHook preCheck
           export HOME="$TMPDIR/home"
@@ -33,17 +23,10 @@
           node --test tests/*.test.js
           runHook postCheck
         '';
-
-        installPhase = ''
-          runHook preInstall
-          mkdir -p "$out/share/paj-rc" "$out/bin"
-          cp -r extensions src public package.json README.md "$out/share/paj-rc/"
-          makeWrapper ${pkgs.nodejs}/bin/node "$out/bin/paj-rc" \
-            --add-flags "$out/share/paj-rc/src/cli.js" \
+        postInstall = ''
+          wrapProgram "$out/bin/paj-rc" \
             --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.systemd]}
-          runHook postInstall
         '';
-
         meta = {
           description = "Private browser control for live main Paj and Pi sessions";
           mainProgram = "paj-rc";
@@ -51,7 +34,6 @@
         };
       };
     });
-
     checks = forAllSystems (system: {
       default = self.packages.${system}.default;
     });

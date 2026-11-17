@@ -6,12 +6,31 @@ import { compactProjectPath } from './paths.js';
 import { sessionInfo } from './session-info.js';
 import { commandSuggestions, insertCommand } from './commands.js';
 import { createSubmissionFeedback, steeringLabel } from './submissions.js';
+import type { Command, Session, SessionState, Envelope, Transcript } from './types.js';
+
+interface Elements {
+  prompt: HTMLTextAreaElement;
+  key: HTMLInputElement;
+  'photo-library': HTMLInputElement;
+  'photo-camera': HTMLInputElement;
+  'deliver-as': HTMLSelectElement;
+  connect: HTMLButtonElement;
+  send: HTMLButtonElement;
+  stop: HTMLButtonElement;
+  older: HTMLButtonElement;
+  'attach-photo': HTMLButtonElement;
+  'take-photo': HTMLButtonElement;
+}
+interface ProjectPath { container: HTMLElement; node: HTMLElement; fullPath: string; branch?: HTMLElement }
+interface Photo { mimeType: string; data: string; url: string }
+interface ApiResponse { authenticated?: boolean; csrfToken?: string; sessions?: Session[]; imageUploads?: boolean }
 
 if (globalThis.isSecureContext && globalThis.navigator?.serviceWorker) {
   navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' }).catch(() => {});
 }
 
-const $ = id => document.getElementById(id);
+const $ = <Id extends string>(id: Id) => document.getElementById(id) as
+  Id extends keyof Elements ? Elements[Id] : HTMLElement;
 const workingIndicator = document.createElement('div');
 workingIndicator.id = 'working-indicator';
 workingIndicator.className = 'working-indicator';
@@ -29,33 +48,33 @@ const workingLabel = document.createElement('span');
 workingLabel.textContent = 'Working…';
 workingIndicator.append(workingSpinner, workingLabel);
 $('composer').prepend(workingIndicator);
-let csrfToken;
-let stream;
+let csrfToken: string;
+let stream: EventSource | null;
 let connected = false;
-let sessions = [];
-let selected = null;
+let sessions: Session[] = [];
+let selected: Session | null = null;
 let transcript = createTranscript();
 let selectionVersion = 0;
 let snapshotting = false;
 let synced = false;
 let resnapshotNeeded = false;
-let buffer = [];
+let buffer: Envelope[] = [];
 let sending = false;
 let stopping = false;
 let listVersion = 0;
 let authenticated = false;
 let imageUploads = false;
-let photos = [];
+let photos: Photo[] = [];
 let preparingPhotos = false;
 let photoError = '';
 let photoRevision = 0;
-let removePhotoButtons = [];
-let projectPaths = [];
-let headerPath;
+let removePhotoButtons: HTMLButtonElement[] = [];
+let projectPaths: ProjectPath[] = [];
+let headerPath: ProjectPath | null;
 const submissionFeedback = createSubmissionFeedback();
-const feedbackScope = (id, generation) => `${id}:${generation}`;
+const feedbackScope = (id: string, generation: string) => `${id}:${generation}`;
 let commandMenuKey = '';
-let commandOptions = [];
+let commandOptions: Command[] = [];
 let commandIndex = -1;
 let commandsDismissed = false;
 
@@ -68,7 +87,7 @@ function closeCommandMenu() {
   $('prompt').removeAttribute('aria-activedescendant');
 }
 
-function chooseCommand(command, version) {
+function chooseCommand(command: Command, version: number) {
   const input = $('prompt');
   if (version !== selectionVersion || !synced || snapshotting || sending ||
       !transcript.commands.some(item => item.name === command.name && item.source === command.source)) return;
@@ -124,7 +143,7 @@ function renderCommandMenu() {
   menu.hidden = false;
 }
 
-function commandKeydown(event) {
+function commandKeydown(event: KeyboardEvent) {
   if (event.isComposing) return;
   renderCommandMenu();
   if ($('command-completions').hidden) return;
@@ -154,7 +173,7 @@ function fitProjectPaths() {
     probe.className = 'path-measure';
     probe.setAttribute('aria-hidden', 'true');
     entry.container.append(probe);
-    const measure = text => {
+    const measure = (text: string) => {
       probe.textContent = text;
       return probe.getBoundingClientRect().width;
     };
@@ -218,9 +237,10 @@ function renderPhotos() {
   $('photo-previews').hidden = photos.length === 0;
 }
 
-async function selectPhotos(event) {
-  const files = Array.from(event.target.files || []).slice(0, Math.max(0, MAX_IMAGES - photos.length));
-  event.target.value = '';
+async function selectPhotos(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = Array.from(input.files || []).slice(0, Math.max(0, MAX_IMAGES - photos.length));
+  input.value = '';
   if (!files.length || preparingPhotos || sending || !selected || !authenticated) return;
   const revision = ++photoRevision;
   const version = selectionVersion;
@@ -267,10 +287,11 @@ function renderPhotoControls() {
 }
 
 class ApiError extends Error {
-  constructor(message, status) { super(message); this.status = status; }
+  status: number;
+  constructor(message: string, status: number) { super(message); this.status = status; }
 }
 
-async function api(path, body) {
+async function api<T = ApiResponse>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method: body === undefined ? 'GET' : 'POST',
     credentials: 'same-origin',
@@ -279,7 +300,7 @@ async function api(path, body) {
     headers: body === undefined ? {} : { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken || '' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  let data;
+  let data: T & { error?: { message?: string } };
   try { data = await response.json(); }
   catch { throw new ApiError(`Service unavailable (${response.status})`, response.status); }
   if (!response.ok) {
@@ -363,7 +384,7 @@ function start() {
   source.addEventListener('resync', () => refreshSessions(true));
   source.addEventListener('session', event => {
     if (stream !== source) return;
-    let envelope;
+    let envelope: Envelope;
     try { envelope = JSON.parse(event.data); } catch { refreshSessions(true); return; }
     const entry = sessions.find(session => session.id === envelope.id);
     if (entry && entry.generation === envelope.generation) {
@@ -444,7 +465,7 @@ function renderSessions() {
   fitProjectPaths();
 }
 
-function metadataRow(state, fallbackModel) {
+function metadataRow(state: SessionState, fallbackModel?: string) {
   const info = sessionInfo(state, fallbackModel);
   const row = document.createElement('span');
   row.className = 'agent-meta';
@@ -460,18 +481,18 @@ function metadataRow(state, fallbackModel) {
   return row;
 }
 
-function awaitingConfirmation(state = {}) {
+function awaitingConfirmation(state: SessionState = {}) {
   return state.busy && !state.runId && !state.editorBusy && !state.terminalRequired;
 }
 
-function statusText(state = {}) {
+function statusText(state: SessionState = {}) {
   if (state.terminalRequired) return 'Needs terminal';
   if (state.editorBusy) return 'Editor in control';
   if (awaitingConfirmation(state)) return 'Awaiting Pi confirmation';
   return state.busy ? 'Working' : 'Ready';
 }
 
-function selectSession(session, { reveal = true } = {}) {
+function selectSession(session: Session | null, { reveal = true } = {}) {
   if (selected?.id !== session?.id || selected?.generation !== session?.generation) clearPhotos();
   selectionVersion++;
   selected = session;
@@ -497,7 +518,7 @@ async function refreshSnapshot() {
   buffer = [];
   renderControls();
   try {
-    const snapshot = await api(`/api/sessions/${encodeURIComponent(id)}/snapshot`);
+    const snapshot = await api<Transcript>(`/api/sessions/${encodeURIComponent(id)}/snapshot`);
     if (version !== selectionVersion || !authenticated) return;
     transcript = applySnapshot(snapshot);
     synced = true;
@@ -638,12 +659,13 @@ $('prompt').onclick = renderCommandMenu;
 $('prompt').onselect = renderCommandMenu;
 $('prompt').onkeyup = renderCommandMenu;
 $('prompt').onkeydown = commandKeydown;
-$('deliver-as').onchange = () => {
+function renderDelivery() {
   const current = $('delivery-current');
-  if (current) current.textContent = { steer: 'Steer', reject: 'Reject',
-    followUp: 'Queue follow-up' }[$('deliver-as').value] || 'Steer';
-};
-$('deliver-as').onchange();
+  if (current) current.textContent = ({ steer: 'Steer', reject: 'Reject',
+    followUp: 'Queue follow-up' } as Record<string, string>)[$('deliver-as').value] || 'Steer';
+}
+$('deliver-as').onchange = renderDelivery;
+renderDelivery();
 $('attach-photo').onclick = () => $('photo-library').click();
 $('take-photo').onclick = () => $('photo-camera').click();
 $('photo-library').onchange = selectPhotos;
@@ -710,7 +732,7 @@ $('older').onclick = async () => {
   const height = viewport.scrollHeight;
   const scrollTop = viewport.scrollTop;
   try {
-    const page = await api(`/api/sessions/${encodeURIComponent(selected.id)}/snapshot?before=${encodeURIComponent(transcript.before || '')}`);
+    const page = await api<Transcript>(`/api/sessions/${encodeURIComponent(selected.id)}/snapshot?before=${encodeURIComponent(transcript.before || '')}`);
     if (version === selectionVersion && generation === transcript.generation) {
       if (!prependHistory(transcript, page)) { refreshSnapshot(); return; }
       renderTranscript();

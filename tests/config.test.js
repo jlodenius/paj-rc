@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultOrigins, getPaths, loadConfig, saveConfig, validateOrigin } from '../src/config.js';
+import { defaultOrigins, getPaths, loadConfig, saveConfig, validateOrigin } from '../dist/src/config.js';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'paj-rc-config-'));

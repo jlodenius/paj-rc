@@ -1,13 +1,28 @@
 import { boundedMessageText } from './text.js';
 
+import type { Envelope, Message, SubmissionStatus } from './types.js';
+
+interface Feedback {
+  scope: string;
+  requestId: string;
+  text: string;
+  matchText: string;
+  imageCount: number;
+  seq: number;
+  status: SubmissionStatus;
+  nativeId: string | null;
+}
+
 export function createSubmissionFeedback(limit = 128) {
   if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError('Positive feedback limit required');
-  const entries = new Map();
-  const observed = new Set();
-  const key = (scope, id) => `${scope}:${id}`;
+  const entries = new Map<string, Feedback>();
+  const observed = new Set<string>();
+  const key = (scope: string, id: string) => `${scope}:${id}`;
   return {
     clear() { entries.clear(); observed.clear(); },
-    begin(scope, { requestId, text, imageCount = 0, seq }) {
+    begin(scope: string, { requestId, text, imageCount = 0, seq }: {
+      requestId: string; text: string; imageCount?: number; seq: number;
+    }) {
       const matchText = imageCount && !text.trim()
         ? imageCount === 1 ? '[Image attached]' : `[${imageCount} images attached]`
         : boundedMessageText(text);
@@ -15,11 +30,11 @@ export function createSubmissionFeedback(limit = 128) {
         status: 'submitting', nativeId: null });
       while (entries.size > limit) entries.delete(entries.keys().next().value);
     },
-    update(scope, requestId, status) {
+    update(scope: string, requestId: string, status: SubmissionStatus) {
       const entry = entries.get(key(scope, requestId));
       if (entry) entry.status = status;
     },
-    observe(scope, envelope) {
+    observe(scope: string, envelope: Envelope) {
       const message = envelope.event?.type === 'message' ? envelope.event.message : null;
       if (message?.role !== 'user' || observed.has(key(scope, message.id))) return;
       observed.add(key(scope, message.id));
@@ -33,7 +48,7 @@ export function createSubmissionFeedback(limit = 128) {
         }
       }
     },
-    messages(scope, messages) {
+    messages(scope: string, messages: Message[]) {
       const current = [...entries.values()].filter(entry => entry.scope === scope);
       const decorated = messages.map(message => {
         const entry = current.find(value => value.nativeId === message.id && value.status !== 'rejected');
@@ -51,7 +66,7 @@ export function createSubmissionFeedback(limit = 128) {
   };
 }
 
-export function steeringLabel(message) {
+export function steeringLabel(message: Message) {
   if (message.observed && message.submissionStatus === 'submitted') return 'Steering';
   return { submitting: 'Steering · submitting…', submitted: 'Steering · submitted',
     unknown: 'Steering · delivery unconfirmed', rejected: 'Steering · not submitted' }[message.submissionStatus] || 'Steering';

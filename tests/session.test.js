@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { setImmediate as immediate, setTimeout as delay } from 'node:timers/promises';
-import { createSessionAdapter, isEligible, projectMessage } from '../src/session.js';
+import { createSessionAdapter, isEligible, projectMessage } from '../dist/src/session.js';
 
 function harness(options = {}) {
   const events = new Map();
@@ -399,9 +399,9 @@ test('bounded dedup and synchronous submission errors are stable', () => {
 
 test('image prompts preserve exact SDK content, image-only input, capability and hash dedup', () => {
   const image = { mimeType: 'image/png', data: readFileSync(
-    new URL('../public/icons/icon-192.png', import.meta.url)).toString('base64') };
+    new URL('../dist/public/icons/icon-192.png', import.meta.url)).toString('base64') };
   const other = { mimeType: 'image/png', data: readFileSync(
-    new URL('../public/icons/icon-512.png', import.meta.url)).toString('base64') };
+    new URL('../dist/public/icons/icon-512.png', import.meta.url)).toString('base64') };
   const h = harness();
   assert.equal(h.adapter.state().supportsImages, true);
   h.prompt({ text: '', images: [image] });
@@ -539,7 +539,7 @@ test('snapshots advertise only bounded native skill/prompt commands with native 
 });
 
 test('only approved live commands opt into native expansion across delivery modes and photos', () => {
-  const image = { mimeType: 'image/png', data: readFileSync(new URL('../public/icons/icon-192.png', import.meta.url)).toString('base64') };
+  const image = { mimeType: 'image/png', data: readFileSync(new URL('../dist/public/icons/icon-192.png', import.meta.url)).toString('base64') };
   for (const deliverAs of ['reject', 'steer', 'followUp']) {
     for (const images of [undefined, [image]]) {
       for (const text of ['/review argument', '/skill:check argument', '/danger', '/blocked', '/unknown', 'ordinary']) {

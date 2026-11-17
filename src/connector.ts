@@ -1,22 +1,38 @@
 import { createConnection } from 'node:net';
 
+import type { Socket } from 'node:net';
+import type { createSessionAdapter } from './session.js';
+
+type Adapter = ReturnType<typeof createSessionAdapter>;
+interface ConnectorOptions {
+  adapter: Adapter;
+  socketPath: string;
+  ensureService: () => unknown;
+  connect?: typeof createConnection;
+  heartbeatMs?: number;
+  handshakeMs?: number;
+  retryInitialMs?: number;
+  retryMaxMs?: number;
+  onStatus?: (status: string) => void;
+}
+
 const MAX_FRAME = 2 * 1024 * 1024;
 
 export function createConnector({ adapter, socketPath, ensureService,
   connect = createConnection, heartbeatMs = 5000, handshakeMs = 5000,
-  retryInitialMs = 250, retryMaxMs = 30000, onStatus = () => {} }) {
-  let socket;
+  retryInitialMs = 250, retryMaxMs = 30000, onStatus = () => {} }: ConnectorOptions) {
+  let socket: Socket;
   let stopped = true;
   let acknowledged = false;
-  let retryTimer;
-  let heartbeat;
-  let handshake;
+  let retryTimer: ReturnType<typeof setTimeout>;
+  let heartbeat: ReturnType<typeof setInterval>;
+  let handshake: ReturnType<typeof setTimeout>;
   let retryMs = retryInitialMs;
   let attempt = 0;
-  let unsubscribe;
+  let unsubscribe: () => unknown;
 
-  const status = (value) => { try { onStatus(value); } catch {} };
-  const send = (frame) => {
+  const status = (value: string) => { try { onStatus(value); } catch {} };
+  const send = (frame: unknown) => {
     if (!socket || socket.destroyed || !socket.writable) return false;
     const line = JSON.stringify(frame) + '\n';
     if (Buffer.byteLength(line) > MAX_FRAME || socket.writableLength > MAX_FRAME) {
@@ -83,7 +99,7 @@ export function createConnector({ adapter, socketPath, ensureService,
             return current.destroy();
           }
           try {
-            const result = adapter[frame.method](frame.params);
+            const result = adapter[frame.method as 'snapshot' | 'prompt' | 'abort'](frame.params);
             send({ type: 'response', id: frame.id, ok: true, result });
           } catch (error) {
             send({ type: 'response', id: frame.id, ok: false,

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatTokens, sessionInfo } from '../public/session-info.js';
+import { formatTokens, sessionInfo } from '../dist/public/session-info.js';
 
 test('context counts use compact lowercase numbers without inventing unknown usage', () => {
   for (const [input, output] of [[0, '0'], [999, '999'], [1500, '1.5k'], [200000, '200k'],

@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { validateImages, hashImages } from '../src/images.js';
+import { validateImages, hashImages } from '../dist/src/images.js';
 import { MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_IMAGE_BYTES, MAX_IMAGE_DIMENSION,
-  MAX_IMAGE_PIXELS } from '../public/image-limits.js';
+  MAX_IMAGE_PIXELS } from '../dist/public/image-limits.js';
 
-const png = readFileSync(new URL('../public/icons/icon-192.png', import.meta.url));
+const png = readFileSync(new URL('../dist/public/icons/icon-192.png', import.meta.url));
 const image = (bytes = png, mimeType = 'image/png') => ({ mimeType, data: bytes.toString('base64') });
 
 function crc(bytes) {

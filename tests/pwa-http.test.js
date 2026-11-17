@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { inflateSync } from 'node:zlib';
-import { startDaemon } from '../src/daemon.js';
+import { startDaemon } from '../dist/src/daemon.js';
 
 async function setup(t, options = {}) {
   const runtimeDir = await mkdtemp(join(tmpdir(), 'rc-pwa-'));
@@ -96,7 +96,7 @@ test('installable app exposes a scoped manifest, worker, PNG icons, and steering
   assert.match(csp, /worker-src 'self'/);
   assert.match(csp, /manifest-src 'self'/);
   assert.match(csp, /img-src 'self' blob:/);
-  assert.equal((await get('/icons/../../src/auth.js')).status, 401);
+  assert.equal((await get('/icons/../../dist/src/auth.js')).status, 401);
 });
 
 test('remembered browser event stream stays open without a server-side expiry', async t => {

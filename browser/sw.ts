@@ -1,3 +1,4 @@
+const worker = self as unknown as ServiceWorkerGlobalScope;
 const CACHE_PREFIX = 'paj-remote-shell-';
 const CACHE_NAME = `${CACHE_PREFIX}v8`;
 const SHELL_PATHS = new Set([
@@ -24,42 +25,42 @@ const SHELL_PATHS = new Set([
   '/icons/apple-touch-icon.png',
 ]);
 
-function publicRequest(url) {
+function publicRequest(url: URL) {
   return new Request(url, { credentials: 'omit', cache: 'no-store', redirect: 'error' });
 }
 
-function cacheable(response) {
+function cacheable(response: Response) {
   return response.ok && !response.redirected &&
     (response.type === 'basic' || response.type === 'default');
 }
 
-self.addEventListener('install', event => {
+worker.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
     await Promise.all([...SHELL_PATHS].map(async path => {
-      const request = publicRequest(new URL(path, self.location.origin));
+      const request = publicRequest(new URL(path, worker.location.origin));
       const response = await fetch(request);
       if (!cacheable(response)) throw new Error('Public shell unavailable');
       await cache.put(request.url, response);
     }));
-    await self.skipWaiting();
+    await worker.skipWaiting();
   })());
 });
 
-self.addEventListener('activate', event => {
+worker.addEventListener('activate', event => {
   event.waitUntil((async () => {
     const names = await caches.keys();
     await Promise.all(names.filter(name => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME)
       .map(name => caches.delete(name)));
-    await self.clients.claim();
+    await worker.clients.claim();
   })());
 });
 
-self.addEventListener('fetch', event => {
+worker.addEventListener('fetch', event => {
   const request = event.request;
   if (request.method !== 'GET' || request.headers.has('Authorization')) return;
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin || url.search || url.hash || url.username || url.password ||
+  if (url.origin !== worker.location.origin || url.search || url.hash || url.username || url.password ||
       !SHELL_PATHS.has(url.pathname)) return;
   event.respondWith((async () => {
     let response;

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSubmissionFeedback, steeringLabel } from '../public/submissions.js';
-import { projectMessage } from '../src/session.js';
+import { createSubmissionFeedback, steeringLabel } from '../dist/public/submissions.js';
+import { projectMessage } from '../dist/src/session.js';
 
 const begin = (feedback, id = 'request', scope = 'session:generation') => feedback.begin(scope,
   { requestId: id, text: 'Change direction', seq: 10 });

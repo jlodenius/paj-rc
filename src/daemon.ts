@@ -7,6 +7,22 @@ import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import type { Paths, Config } from './config.js';
+import type { BrokerOptions } from './broker.js';
+
+interface DaemonOptions {
+  paths: Paths;
+  listSessions?: () => Promise<unknown>;
+  brokerOptions?: Partial<BrokerOptions>;
+  onIdle?: () => unknown;
+  startupGraceMs?: number;
+  keepaliveIntervalMs?: number;
+}
+export interface Controller { address: string; socketPath: string; close: () => Promise<void> }
+interface Stream { response: ServerResponse; token: string; expires: number | null }
+
 const exec = promisify(execFile);
 const publicRoot = new URL('../public/', import.meta.url);
 const assets = new Map([
@@ -34,16 +50,16 @@ const assets = new Map([
   ['/icons/apple-touch-icon.png', ['icons/apple-touch-icon.png', 'image/png']],
 ]);
 
-function json(response, status, data, headers = {}) {
+function json(response: ServerResponse, status: number, data: unknown, headers: Record<string, string> = {}) {
   response.writeHead(status, { 'Content-Type': 'application/json', ...headers });
   response.end(JSON.stringify(data));
 }
 
-function fail(response, status, code, message) {
+function fail(response: ServerResponse, status: number, code: string, message: string) {
   json(response, status, { error: { code, message } });
 }
 
-async function body(request, limit = 128 * 1024) {
+async function body(request: IncomingMessage, limit = 128 * 1024): Promise<Record<string, unknown>> {
   if (request.headers['content-type']?.split(';')[0] !== 'application/json') {
     throw Object.assign(new Error('Expected application/json'), { status: 415 });
   }
@@ -63,25 +79,25 @@ async function body(request, limit = 128 * 1024) {
   }
 }
 
-export async function startDaemon(config, options = {}) {
+export async function startDaemon(config: Config, options: DaemonOptions): Promise<Controller> {
   const auth = createAuth(config.pairingKey, {
     file: join(options.paths.configDir ?? options.paths.runtimeDir, 'browser-sessions.json'),
   });
-  let address;
-  let allowed;
-  let attempts = [];
-  let writes = [];
+  let address: string;
+  let allowed: Set<string>;
+  let attempts: number[] = [];
+  let writes: number[] = [];
   let closing = false;
-  let idleTimer;
-  const streams = new Set();
-  const publish = (name, data) => {
+  let idleTimer: ReturnType<typeof setTimeout>;
+  const streams = new Set<Stream>();
+  const publish = (name: string, data: unknown) => {
     const record = `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const client of streams) {
       if (client.response.destroyed || client.response.writableEnded) streams.delete(client);
       else if (!client.response.write(record)) client.response.destroy();
     }
   };
-  let registryPending;
+  let registryPending: Promise<unknown>;
   const listSessions = options.listSessions ?? (() => {
     if (!registryPending) {
       registryPending = exec(config.pajCommand, ['--json', 'session', 'list', '--all'], {
@@ -90,9 +106,9 @@ export async function startDaemon(config, options = {}) {
     }
     return registryPending;
   });
-  let broker;
-  let controller;
-  const scheduleIdle = (size, timeout = config.idleTimeoutMs) => {
+  let broker: Awaited<ReturnType<typeof startBroker>>;
+  let controller: Controller;
+  const scheduleIdle = (size: number, timeout = config.idleTimeoutMs) => {
     clearTimeout(idleTimer);
     if (size || closing) return;
     idleTimer = setTimeout(() => {
@@ -199,7 +215,7 @@ export async function startDaemon(config, options = {}) {
           const images = validateImages(input.images);
           if (typeof input.text !== 'string' || (!input.text.trim() && !images.length) || input.text.length > 16000 ||
               typeof input.requestId !== 'string' || !/^[a-zA-Z0-9-]{8,128}$/.test(input.requestId) ||
-              !['reject', 'steer', 'followUp'].includes(input.deliverAs)) {
+              (typeof input.deliverAs !== 'string' || !['reject', 'steer', 'followUp'].includes(input.deliverAs))) {
             return fail(response, 400, 'invalid', 'Invalid prompt or explicit delivery mode');
           }
           if (images.length) {
@@ -230,7 +246,7 @@ export async function startDaemon(config, options = {}) {
   server.headersTimeout = 10000;
   server.maxHeadersCount = 50;
   try {
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
       server.listen(config.port, '127.0.0.1', resolve);
     });
@@ -239,9 +255,9 @@ export async function startDaemon(config, options = {}) {
     throw error;
   }
   server.on('error', () => {});
-  address = `http://127.0.0.1:${server.address().port}`;
+  address = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   allowed = new Set(config.port === 0
-    ? [address, `http://localhost:${server.address().port}`, ...config.allowedOrigins]
+    ? [address, `http://localhost:${(server.address() as AddressInfo).port}`, ...config.allowedOrigins]
     : config.allowedOrigins);
   scheduleIdle(0, Math.max(config.idleTimeoutMs, options.startupGraceMs ?? 5000));
   const keepalive = setInterval(() => {
@@ -252,7 +268,7 @@ export async function startDaemon(config, options = {}) {
     }
   }, options.keepaliveIntervalMs ?? 10000);
   keepalive.unref();
-  let closePromise;
+  let closePromise: Promise<void>;
   controller = {
     address, socketPath: options.paths.socketPath,
     close() {

@@ -1,8 +1,10 @@
-export function createTranscript() {
+import type { Transcript, Envelope } from './types.js';
+
+export function createTranscript(): Transcript {
   return { generation: null, seq: 0, state: {}, commands: [], messages: [], hasMore: false, before: null };
 }
 
-export function applySnapshot(snapshot) {
+export function applySnapshot(snapshot: Transcript): Transcript {
   return {
     generation: snapshot.generation,
     seq: snapshot.seq,
@@ -14,7 +16,7 @@ export function applySnapshot(snapshot) {
   };
 }
 
-export function applyEvent(transcript, envelope) {
+export function applyEvent(transcript: Transcript, envelope: Envelope) {
   if (envelope.generation !== transcript.generation) return 'resync';
   if (envelope.seq <= transcript.seq) return 'duplicate';
   if (envelope.seq !== transcript.seq + 1) return 'resync';
@@ -37,7 +39,7 @@ export function applyEvent(transcript, envelope) {
   return 'applied';
 }
 
-export function prependHistory(transcript, page) {
+export function prependHistory(transcript: Transcript, page: Transcript) {
   if (page.generation !== transcript.generation) return false;
   const ids = new Set(transcript.messages.map(message => message.id));
   transcript.messages.unshift(...page.messages.filter(message => !ids.has(message.id)));

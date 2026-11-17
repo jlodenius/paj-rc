@@ -10,14 +10,14 @@ const FORMAT_ERROR = 'Choose a JPEG, PNG, WebP, HEIC, or HEIF photo.';
 const READ_ERROR = 'This photo could not be read. Try another photo or export it as JPEG.';
 const ENCODE_ERROR = 'This photo could not be prepared. Try another photo or export it as JPEG.';
 
-function formatOf(bytes) {
+function formatOf(bytes: Uint8Array) {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
     return 'image/jpeg';
   }
   if (bytes.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((value, i) => bytes[i] === value)) {
     return 'image/png';
   }
-  const ascii = (start, count) => String.fromCharCode(...bytes.subarray(start, start + count));
+  const ascii = (start: number, count: number) => String.fromCharCode(...bytes.subarray(start, start + count));
   if (bytes.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') return 'image/webp';
   if (bytes.length >= 16 && ascii(4, 4) === 'ftyp') {
     const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
@@ -31,7 +31,7 @@ function formatOf(bytes) {
   return null;
 }
 
-function headerDimensions(bytes, format) {
+function headerDimensions(bytes: Uint8Array, format: string): [number, number] | null {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (format === 'image/png' && bytes.length >= 24) return [view.getUint32(16), view.getUint32(20)];
   if (format === 'image/jpeg') {
@@ -52,7 +52,7 @@ function headerDimensions(bytes, format) {
   if (format === 'image/webp' && bytes.length >= 25) {
     const kind = String.fromCharCode(...bytes.subarray(12, 16));
     if (kind === 'VP8X' && bytes.length >= 30) {
-      const uint24 = offset => bytes[offset] + bytes[offset + 1] * 256 + bytes[offset + 2] * 65536;
+      const uint24 = (offset: number) => bytes[offset] + bytes[offset + 1] * 256 + bytes[offset + 2] * 65536;
       return [uint24(24) + 1, uint24(27) + 1];
     }
     if (kind === 'VP8L' && bytes[20] === 0x2f) {
@@ -67,7 +67,7 @@ function headerDimensions(bytes, format) {
   return null;
 }
 
-function validateDimensions(width, height) {
+function validateDimensions(width: number, height: number) {
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1) {
     throw new Error(READ_ERROR);
   }
@@ -77,8 +77,8 @@ function validateDimensions(width, height) {
   }
 }
 
-function decode(image, url) {
-  return new Promise((resolve, reject) => {
+function decode(image: HTMLImageElement, url: string) {
+  return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(READ_ERROR)), 15000);
     image.onload = () => { clearTimeout(timer); resolve(); };
     image.onerror = () => { clearTimeout(timer); reject(new Error(READ_ERROR)); };
@@ -92,8 +92,8 @@ function decode(image, url) {
   });
 }
 
-function encode(canvas, quality) {
-  return new Promise((resolve, reject) => {
+function encode(canvas: HTMLCanvasElement, quality: number) {
+  return new Promise<Blob>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(ENCODE_ERROR)), 15000);
     try {
       canvas.toBlob(blob => {
@@ -108,7 +108,7 @@ function encode(canvas, quality) {
   });
 }
 
-async function base64Of(blob) {
+async function base64Of(blob: Blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   let binary = '';
   for (let offset = 0; offset < bytes.length; offset += 8192) {
@@ -117,7 +117,7 @@ async function base64Of(blob) {
   return btoa(binary);
 }
 
-export async function prepareImage(file) {
+export async function prepareImage(file: Blob) {
   if (!(file instanceof Blob)) throw new Error(FORMAT_ERROR);
   if (file.size > ORIGINAL_BYTE_LIMIT) throw new Error('This photo is over 20 MiB. Choose a smaller photo.');
   if (!file.size) throw new Error(READ_ERROR);
@@ -127,15 +127,15 @@ export async function prepareImage(file) {
   try { bytes = new Uint8Array(await file.arrayBuffer()); }
   catch { throw new Error(READ_ERROR); }
   const format = formatOf(bytes);
-  const heifFamily = value => value === 'image/heic' || value === 'image/heif';
+  const heifFamily = (value: string) => value === 'image/heic' || value === 'image/heif';
   if (!format || (declared && declared !== format && !(heifFamily(declared) && heifFamily(format)))) {
     throw new Error(FORMAT_ERROR);
   }
   const dimensions = headerDimensions(bytes, format);
   if (dimensions) validateDimensions(...dimensions);
-  let image;
-  let url;
-  let canvas;
+  let image: HTMLImageElement;
+  let url: string;
+  let canvas: HTMLCanvasElement;
   try {
     image = new Image();
     url = URL.createObjectURL(file);

@@ -1,103 +1,79 @@
 # paj-rc
 
-`paj-rc` lets you remotely control your running main [Pi](https://github.com/badlogic/pi-mono)
-sessions from your phone or browser through [Paj](https://github.com/jlodenius/paj).
+Private browser control for live main [Pi](https://github.com/badlogic/pi-mono) sessions through
+[Paj](https://github.com/jlodenius/paj). Requires Linux, a systemd user manager, Node.js 22.19+,
+Pi 1.2+, and the latest Paj CLI and extension.
 
 ## Install
 
-Requires Linux with a systemd user manager, Node.js 22.19 or newer, Pi 1.2 or newer, and the latest
-[Paj CLI and Pi extension](https://github.com/jlodenius/paj#install).
-
-Install the CLI and the Pi extension separately:
-
 ```sh
 npm install -g git+https://github.com/jlodenius/paj-rc.git
-pi install git:github.com/jlodenius/paj-rc
+pi install "$(npm root -g)/paj-rc"
 ```
 
-### NixOS
+The npm Git installation builds TypeScript, then Pi loads that compiled package. Do not install the
+raw Git checkout directly with Pi: its production-only dependency install cannot build the sources.
+Published packages contain Node and browser JavaScript in `dist/`; generated JS is not source.
 
-On NixOS with Home Manager, use this instead of the commands above. Add the GitHub flake input:
-
-```nix
-inputs.paj-rc = {
-  url = "github:jlodenius/paj-rc";
-  inputs.nixpkgs.follows = "nixpkgs";
-};
-```
-
-In your Home Manager user configuration, with `inputs` available in the module scope:
+For Nix, add `github:jlodenius/paj-rc` as a flake input named `paj-rc`, then use Home Manager:
 
 ```nix
 home.packages = [inputs.paj-rc.packages.${pkgs.stdenv.hostPlatform.system}.default];
-home.file.".pi/agent/extensions/paj-rc".source = "${inputs.paj-rc}";
+home.file.".pi/agent/extensions/paj-rc".source =
+  "${inputs.paj-rc.packages.${pkgs.stdenv.hostPlatform.system}.default}/lib/node_modules/paj-rc";
 ```
 
-The flake includes Node. Rebuild NixOS, then continue below. Home Manager loads the extension.
+## Pair
 
-## Setup
-
-In Pi, reload extensions and approve the one-time user-service setup:
+In an eligible main Pi TUI, reload and approve the one-time private user-service setup:
 
 ```text
 /reload
 /rc setup
 ```
 
-With a main Pi session open, check the service and show your pairing key:
-
 ```sh
 paj-rc status
 paj-rc key
 ```
 
-Open <http://127.0.0.1:43187> and enter the key. Pair only trusted browsers: they can control Pi
-and its tools. Treat the key like a password. Your browser remembers its pairing.
+Open <http://127.0.0.1:43187> and enter the key. Treat it like a password: paired browsers can control
+Pi and its tools. The service is not enabled at login. Use `paj-rc --help` for settings and revocation.
 
-## Skills and prompts
+Select a session and type `/` for skills and prompt templates. Insert a suggestion, add arguments,
+then send. Steering and follow-ups require an explicit choice; uncertain writes are never retried.
 
-Select a session and type `/` to browse its loaded skills and prompt templates. Tap a suggestion,
-or use arrow keys and Enter/Tab, to insert it without sending. Add arguments, then send normally:
+## Private remote access
 
-```text
-/skill:research investigate this API
-/review "API compatibility"
-```
-
-Pi expands the selected skill or template, including when steering or queueing a follow-up. Terminal
-commands are not offered. After updating the extension, reload it and refresh the browser to load
-command suggestions; older adapters provide none.
-
-## Safety and privacy
-
-Paired browsers control live main sessions; subagents are not exposed. Closing the browser does
-not stop work. Submitted or queued messages do not prove execution, and uncertain writes are never
-automatically retried.
-
-Only the public app shell is cached for offline use, not conversations, credentials, photos, or
-writes. Photos stay in memory in the browser; Pi and its provider handle submitted images as normal
-user input. Context counts are Pi's estimates, not billing totals.
-
-## Remote access with Tailscale
-
-Install Tailscale on your computer and phone, and sign in to the same tailnet. Check existing
-routes before configuring private HTTPS access; do not replace another application's route or use
-public Funnel:
+With Tailscale installed on both devices, inspect existing routes before adding private HTTPS.
+Do not replace another application's route or enable public Funnel.
 
 ```sh
 tailscale serve status
 tailscale funnel status
 sudo tailscale serve --bg http://127.0.0.1:43187
-```
-
-Add the exact HTTPS origin printed by Serve, without a trailing slash:
-
-```sh
 paj-rc origin add https://your-computer.your-tailnet.ts.net
 ```
 
-With Pi open and Tailscale connected, visit that address on your phone and pair using the same key.
-To install the app on your home screen:
+Use the exact HTTPS origin from Serve, without a trailing slash. Pair there, then use your browser's
+Add to Home Screen or Install App action.
 
-- **iPhone/iPad:** Safari → Share → Add to Home Screen.
-- **Android:** Chrome menu → Install app or Add to Home screen.
+## Privacy
+
+Only the public app shell is cached, never credentials, conversations, photos, or writes. Photos stay
+in browser memory until submitted; Pi and its provider then handle them as normal input. Closing the
+browser does not stop work. Context counts are estimates, not billing totals.
+
+## Develop
+
+```sh
+npm ci
+npm run typecheck
+npm test
+nix build
+```
+
+Node sources live in `src/`, browser sources in `browser/`, and the Pi entry in `extensions/`.
+The build emits executable browser JavaScript and copies static assets to `dist/public/`.
+Optional integration tests use `PAJ_RC_PI_BIN`, `PAJ_RC_PI_MODULE`, or `PAJ_RC_BROWSER_BIN`; no
+sibling checkout is required.

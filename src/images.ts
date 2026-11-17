@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_IMAGE_BYTES, MAX_IMAGE_DIMENSION,
-  MAX_IMAGE_PIXELS } from '../public/image-limits.js';
+  MAX_IMAGE_PIXELS } from '../browser/image-limits.js';
 
-function invalid(message = 'Invalid image attachment', status = 400) {
+export interface ImageAttachment { mimeType: string; data: string }
+
+function invalid(message = 'Invalid image attachment', status = 400): never {
   throw Object.assign(new Error(message), { status, code: status === 413 ? 'image_too_large' : 'invalid_image' });
 }
 
@@ -11,18 +13,18 @@ const crcTable = Array.from({ length: 256 }, (_, value) => {
   return value >>> 0;
 });
 
-function crc32(bytes) {
+function crc32(bytes: Buffer) {
   let value = 0xffffffff;
   for (const byte of bytes) value = crcTable[(value ^ byte) & 255] ^ (value >>> 8);
   return (value ^ 0xffffffff) >>> 0;
 }
 
-function pngDimensions(bytes) {
+function pngDimensions(bytes: Buffer) {
   if (bytes.length < 45 || bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a' ||
       bytes.readUInt32BE(8) !== 13 || bytes.toString('latin1', 12, 16) !== 'IHDR') invalid();
   const depth = bytes[24];
   const color = bytes[25];
-  const depths = { 0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16] };
+  const depths: Record<number, number[]> = { 0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16] };
   if (!depths[color]?.includes(depth) || bytes[26] !== 0 || bytes[27] !== 0 || bytes[28] > 1) invalid();
   let offset = 8;
   let data = false;
@@ -47,7 +49,7 @@ function pngDimensions(bytes) {
   return [bytes.readUInt32BE(16), bytes.readUInt32BE(20)];
 }
 
-function jpegDimensions(bytes) {
+function jpegDimensions(bytes: Buffer) {
   if (bytes.length < 12 || bytes.readUInt16BE(0) !== 0xffd8 ||
       bytes.readUInt16BE(bytes.length - 2) !== 0xffd9) invalid();
   let offset = 2;
@@ -75,7 +77,7 @@ function jpegDimensions(bytes) {
   invalid();
 }
 
-function webpDimensions(bytes) {
+function webpDimensions(bytes: Buffer) {
   if (bytes.length < 26 || bytes.toString('latin1', 0, 4) !== 'RIFF' ||
       bytes.toString('latin1', 8, 12) !== 'WEBP' || bytes.readUInt32LE(4) !== bytes.length - 8) invalid();
   let offset = 12;
@@ -112,7 +114,7 @@ function webpDimensions(bytes) {
   return dimensions;
 }
 
-export function validateImages(value) {
+export function validateImages(value: unknown): ImageAttachment[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) invalid();
   if (value.length > MAX_IMAGES) invalid('Too many image attachments', 413);
@@ -138,7 +140,7 @@ export function validateImages(value) {
   });
 }
 
-export function hashImages(images) {
+export function hashImages(images: ImageAttachment[]) {
   const hash = createHash('sha256');
   for (const image of images) {
     hash.update(image.mimeType).update('\0').update(image.data).update('\0');

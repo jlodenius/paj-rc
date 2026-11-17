@@ -1,17 +1,17 @@
 const MAX_DEPTH = 8;
 const MAX_PARSE_LENGTH = 16384;
 
-function appendText(container, text) {
+function appendText(container: HTMLElement, text: string) {
   container.append(container.ownerDocument.createTextNode(text));
 }
 
-function element(container, tag) {
+function element(container: HTMLElement, tag: string) {
   const node = container.ownerDocument.createElement(tag);
   container.append(node);
   return node;
 }
 
-function safeLink(destination) {
+function safeLink(destination: string) {
   if (!/^https?:\/\//i.test(destination)) return false;
   try {
     const url = new URL(destination);
@@ -19,7 +19,7 @@ function safeLink(destination) {
   } catch { return false; }
 }
 
-function closingMarker(text, marker, from) {
+function closingMarker(text: string, marker: string, from: number) {
   let index = text.indexOf(marker, from);
   while (index !== -1) {
     let slashes = 0;
@@ -30,7 +30,7 @@ function closingMarker(text, marker, from) {
   return -1;
 }
 
-function inline(container, text, depth = 0) {
+function inline(container: HTMLElement, text: string, depth = 0) {
   if (depth >= MAX_DEPTH) { appendText(container, text); return; }
   let start = 0;
   let index = 0;
@@ -73,7 +73,7 @@ function inline(container, text, depth = 0) {
         closingMarker(text, marker, index + marker.length);
       if (end > index + marker.length) {
         flush();
-        const tag = { '`': 'code', '**': 'strong', '*': 'em', '~~': 'del' }[marker];
+        const tag = ({ '`': 'code', '**': 'strong', '*': 'em', '~~': 'del' } as Record<string, string>)[marker];
         const node = element(container, tag);
         const content = text.slice(index + marker.length, end);
         if (marker === '`') appendText(node, content);
@@ -95,13 +95,13 @@ function inline(container, text, depth = 0) {
   flush();
 }
 
-const fence = line => /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-const heading = line => /^ {0,3}(#{1,6})\s+(.+)$/.exec(line);
-const listItem = line => /^ {0,3}([-+*]|\d+[.)])\s+(.+)$/.exec(line);
-const quote = line => /^ {0,3}> ?(.*)$/.exec(line);
-const special = line => fence(line) || heading(line) || listItem(line) || quote(line);
+const fence = (line: string) => /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+const heading = (line: string) => /^ {0,3}(#{1,6})\s+(.+)$/.exec(line);
+const listItem = (line: string) => /^ {0,3}([-+*]|\d+[.)])\s+(.+)$/.exec(line);
+const quote = (line: string) => /^ {0,3}> ?(.*)$/.exec(line);
+const special = (line: string) => fence(line) || heading(line) || listItem(line) || quote(line);
 
-function blocks(container, lines, depth = 0) {
+function blocks(container: HTMLElement, lines: string[], depth = 0) {
   if (depth >= MAX_DEPTH) { appendText(container, lines.join('\n')); return; }
   let index = 0;
   while (index < lines.length) {
@@ -156,7 +156,7 @@ function blocks(container, lines, depth = 0) {
   }
 }
 
-export function renderMarkdown(container, text) {
+export function renderMarkdown(container: HTMLElement, text: string) {
   container.replaceChildren();
   const input = String(text ?? '').replace(/\r\n?/g, '\n');
   if (input.length > MAX_PARSE_LENGTH) { appendText(container, input); return; }

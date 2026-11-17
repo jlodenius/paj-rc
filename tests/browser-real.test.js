@@ -7,8 +7,8 @@ import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startDaemon } from '../src/daemon.js';
-import { createConnector } from '../src/connector.js';
+import { startDaemon } from '../dist/src/daemon.js';
+import { createConnector } from '../dist/src/connector.js';
 
 async function until(predicate, timeout = 10000) {
   const end = Date.now() + timeout;
@@ -24,7 +24,7 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   const root = await mkdtemp(join(tmpdir(), 'paj-rc-browser-'));
   const paths = { runtimeDir: root, socketPath: join(root, 'daemon.sock') };
   const identity = { id: randomUUID(), piSessionId: randomUUID(), pid: process.pid,
-    name: 'Backend', projectRoot: '/home/jacob/Development/work/client-projects/backend',
+    name: 'Backend', projectRoot: '/home/developer/Development/work/client-projects/backend',
     branch: 'feature/mobile-layout', role: 'primary', parentPiSessionId: null };
   const config = { port: 0, allowedOrigins: [], idleTimeoutMs: 60000,
     pairingKey: randomBytes(32).toString('base64url') };

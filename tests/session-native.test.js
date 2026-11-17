@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createSessionAdapter } from '../src/session.js';
+import { createSessionAdapter } from '../dist/src/session.js';
 
 async function until(predicate) {
   for (let n = 0; n < 500; n++) {

@@ -1,4 +1,6 @@
-export function commandSuggestions(commands, text, start, end = start) {
+import type { Command } from './types.js';
+
+export function commandSuggestions(commands: Command[], text: string, start: number, end = start) {
   if (!Array.isArray(commands) || start !== end || !Number.isInteger(start)) return [];
   const token = text.match(/^\/[^\s]*/)?.[0];
   if (!token || start < 1 || start > token.length) return [];
@@ -8,7 +10,7 @@ export function commandSuggestions(commands, text, start, end = start) {
       command.source === 'skill' && command.name.toLowerCase().slice(6).startsWith(prefix)));
 }
 
-export function insertCommand(text, name) {
+export function insertCommand(text: string, name: string) {
   const token = text.match(/^\/[^\s]*/)?.[0];
   if (!token) return null;
   const suffix = text.slice(token.length) || ' ';

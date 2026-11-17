@@ -73,7 +73,7 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
     return { ok: true, json: async () => structuredClone(data) };
   };
   try {
-    await import(`../public/app.js?test=${Date.now()}`);
+    await import(`../dist/public/app.js?test=${Date.now()}`);
     await settle();
     assert.equal(source.url, '/api/events');
     assert.equal(requests.length, 1);

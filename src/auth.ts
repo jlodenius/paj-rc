@@ -3,20 +3,25 @@ import { lstatSync, readFileSync, writeFileSync, renameSync, unlinkSync } from '
 import { dirname } from 'node:path';
 import { privateDirectory } from './config.js';
 
+import type { IncomingMessage } from 'node:http';
+
+type Session = { expires: number | null; csrfToken: string };
+type BrowserSession = Session & { token: string };
+
 const COOKIE_MAX_AGE = 400 * 24 * 60 * 60;
 const cookieName = 'paj_rc_session';
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
-const hash = value => createHash('sha256').update(value).digest('hex');
+const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 
-function equal(a, b) {
+function equal(a: string, b: string) {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-export function createAuth(key, { file } = {}) {
+export function createAuth(key: string, { file }: { file?: string } = {}) {
   const keyId = hash(key);
-  let sessions = new Map();
+  let sessions = new Map<string, Session>();
   let migrate = false;
   if (file) {
     privateDirectory(dirname(file));
@@ -42,7 +47,7 @@ export function createAuth(key, { file } = {}) {
       }
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
-  const commit = next => {
+  const commit = (next: Map<string, Session>) => {
     if (file) {
       const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
       try {
@@ -58,10 +63,10 @@ export function createAuth(key, { file } = {}) {
   };
   if (migrate) commit(sessions);
   const current = () => new Map(sessions);
-  const cookie = (value, secure, maxAge = COOKIE_MAX_AGE) =>
+  const cookie = (value: string, secure: boolean, maxAge = COOKIE_MAX_AGE) =>
     `${cookieName}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
   return {
-    read(request) {
+    read(request: IncomingMessage) {
       const token = (request.headers.cookie ?? '').split(';').map(part => part.trim())
         .find(part => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
       if (!token || !tokenPattern.test(token)) return null;
@@ -69,10 +74,10 @@ export function createAuth(key, { file } = {}) {
       if (!value) return null;
       return { token, ...value };
     },
-    refresh(session, secure) {
+    refresh(session: BrowserSession, secure: boolean) {
       return cookie(session.token, secure);
     },
-    login(input, secure) {
+    login(input: unknown, secure: boolean) {
       if (typeof input !== 'string' || input.length > 256 || !equal(hash(input), keyId)) return null;
       const next = current();
       if (next.size >= 1000) return null;
@@ -82,10 +87,10 @@ export function createAuth(key, { file } = {}) {
       commit(next);
       return { cookie: cookie(token, secure), csrfToken };
     },
-    verifyCsrf(session, input) {
+    verifyCsrf(session: BrowserSession, input: unknown) {
       return typeof input === 'string' && tokenPattern.test(input) && equal(input, session.csrfToken);
     },
-    logout(session, secure) {
+    logout(session: BrowserSession, secure: boolean) {
       const next = current();
       next.delete(hash(session.token));
       commit(next);

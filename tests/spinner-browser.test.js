@@ -62,13 +62,13 @@ async function until(predicate) {
 test('spinner paints every complete glyph at a stable baseline, including the wrap',
   { skip: !process.env.PAJ_RC_BROWSER_BIN, timeout: 30000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'paj-spinner-'));
-  const css = await readFile(new URL('../public/style.css', import.meta.url));
-  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../dist/public/style.css', import.meta.url));
+  const app = await readFile(new URL('../dist/public/app.js', import.meta.url), 'utf8');
   const setup = app.slice(app.indexOf('const $ ='), app.indexOf('let csrfToken;'));
   const server = createServer(async (req, res) => {
     if (req.url === '/style.css') { res.setHeader('Content-Type', 'text/css'); res.end(css); }
     else if (req.url.startsWith('/fonts/')) {
-      res.end(await readFile(new URL(`../public${req.url}`, import.meta.url)));
+      res.end(await readFile(new URL(`../dist/public${req.url}`, import.meta.url)));
     } else {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.end(`<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/style.css"><div id="composer"></div>

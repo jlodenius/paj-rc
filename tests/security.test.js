@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { startDaemon } from '../src/daemon.js';
+import { startDaemon } from '../dist/src/daemon.js';
 import { request as httpRequest } from 'node:http';
 
 async function setup(t, allowedOrigins = []) {

@@ -6,7 +6,17 @@ import { fileURLToPath } from 'node:url';
 import { defaultOrigins, getPaths, loadConfig, saveConfig, validateOrigin } from './config.js';
 import { installService, restartService, serviceStatus, uninstallService } from './service.js';
 
-const HELP = `Usage: node /absolute/path/to/paj-rc/src/cli.js COMMAND
+import type { Paths } from './config.js';
+import type { startDaemon } from './daemon.js';
+
+interface MainOptions {
+  paths?: Paths;
+  output?: (message: string) => void;
+  execute?: (args: string[]) => string;
+  daemonFactory?: typeof startDaemon;
+}
+
+const HELP = `Usage: paj-rc COMMAND
 
 setup --yes [--paj PATH]       Install private config and systemd user unit (not enabled)
 status                        Show installation/service status
@@ -19,8 +29,8 @@ uninstall --yes               Stop/remove unit; retain private config
 serve                         Run the daemon (normally managed by systemd)
 `;
 
-function options(args, allowed) {
-  const result = {};
+function options(args: string[], allowed: string[]) {
+  const result: Record<string, string | true> = {};
   for (let i = 0; i < args.length; i++) {
     const key = args[i];
     if (!allowed.includes(key) || key in result) throw new Error(`Unknown or duplicate option: ${key}`);
@@ -33,19 +43,19 @@ function options(args, allowed) {
   return result;
 }
 
-function integer(value, label) {
-  if (!/^\d+$/.test(value)) throw new Error(`${label} must be an integer`);
+function integer(value: string | true, label: string) {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) throw new Error(`${label} must be an integer`);
   return Number(value);
 }
 
 export async function main(args = process.argv.slice(2), { paths = getPaths(),
-  output = console.log, execute, daemonFactory } = {}) {
+  output = console.log, execute, daemonFactory }: MainOptions = {}) {
   const [command, ...rest] = args;
   const serviceOptions = { paths, ...(execute ? { execute } : {}) };
   if (!command || command === '--help' || command === 'help') { output(HELP); return; }
   if (command === 'setup') {
     const flags = options(rest, ['--yes', '--paj']);
-    await installService({ ...serviceOptions, approved: flags['--yes'], pajCommand: flags['--paj'] || 'paj' });
+    await installService({ ...serviceOptions, approved: flags['--yes'] === true, pajCommand: String(flags['--paj'] || 'paj') });
     output('Setup complete. Service is not enabled at login. Start an eligible Pi session, then run key to pair.');
     return;
   }
@@ -56,7 +66,7 @@ export async function main(args = process.argv.slice(2), { paths = getPaths(),
   }
   if (command === 'uninstall') {
     const flags = options(rest, ['--yes']);
-    uninstallService({ ...serviceOptions, approved: flags['--yes'] });
+    uninstallService({ ...serviceOptions, approved: flags['--yes'] === true });
     output(`Service removed. Private configuration retained at ${paths.configFile}`);
     return;
   }
@@ -100,7 +110,7 @@ export async function main(args = process.argv.slice(2), { paths = getPaths(),
   } else if (command === 'serve') {
     options(rest, []);
     const factory = daemonFactory || (await import('./daemon.js')).startDaemon;
-    let daemon;
+    let daemon: Awaited<ReturnType<typeof startDaemon>>;
     daemon = await factory(config, { paths, onIdle: async () => { await daemon.close(); } });
     for (const signal of ['SIGINT', 'SIGTERM']) {
       process.once(signal, () => { Promise.resolve(daemon.close()).catch(error => {

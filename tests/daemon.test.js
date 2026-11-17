@@ -7,7 +7,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { once } from 'node:events';
-import { startDaemon } from '../src/daemon.js';
+import { startDaemon } from '../dist/src/daemon.js';
 
 async function fixture(t, options = {}) {
   const runtimeDir = await mkdtemp(join(tmpdir(), 'paj-rc-test-'));
@@ -96,7 +96,7 @@ test('image attachments require an explicitly capable adapter and forward only n
   await once(socket, 'registered');
   const headers = await pair(request, config.pairingKey);
   const image = { mimeType: 'image/png', data: readFileSync(
-    new URL('../public/icons/icon-192.png', import.meta.url)).toString('base64') };
+    new URL('../dist/public/icons/icon-192.png', import.meta.url)).toString('base64') };
   const input = { generation: 'generation-1', requestId: randomUUID(), text: '', deliverAs: 'steer',
     images: [{ ...image, url: 'not-forwarded' }] };
   const path = `/api/sessions/${identity.id}/prompt`;
@@ -132,7 +132,7 @@ test('image prompts fail closed for older adapters and models without image supp
     const response = await request(`/api/sessions/${identity.id}/prompt`, { method: 'POST', headers,
       body: JSON.stringify({ generation: 'generation-1', requestId: randomUUID(), text: '', deliverAs: 'steer',
         images: [{ mimeType: 'image/png', data: readFileSync(
-          new URL('../public/icons/icon-192.png', import.meta.url)).toString('base64') }] }) });
+          new URL('../dist/public/icons/icon-192.png', import.meta.url)).toString('base64') }] }) });
     assert.equal(response.status, 409);
     const data = await response.json();
     assert.equal(data.error.code, 'images_unsupported');

@@ -3,6 +3,16 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, 
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
+export interface Config {
+  version: number;
+  port: number;
+  idleTimeoutMs: number;
+  allowedOrigins: string[];
+  pairingKey: string;
+  pajCommand: string;
+}
+export type Paths = ReturnType<typeof getPaths>;
+
 export const DEFAULT_PORT = 43187;
 export const DEFAULT_IDLE_TIMEOUT_MS = 30000;
 
@@ -24,11 +34,11 @@ export function getPaths(env = process.env) {
   };
 }
 
-export function defaultOrigins(port) {
+export function defaultOrigins(port: number) {
   return [`http://127.0.0.1:${port}`, `http://localhost:${port}`].map(origin => new URL(origin).origin);
 }
 
-export function validateOrigin(origin) {
+export function validateOrigin(origin: string) {
   if (typeof origin !== 'string') throw new Error('Origin must be a string');
   let url;
   try { url = new URL(origin); } catch { throw new Error(`Invalid origin: ${origin}`); }
@@ -40,7 +50,7 @@ export function validateOrigin(origin) {
   return origin;
 }
 
-export function validateConfig(config) {
+export function validateConfig(config: Config) {
   if (!config || config.version !== 1) throw new Error('Unsupported configuration version');
   if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
     throw new Error('Port must be an integer from 1 to 65535');
@@ -61,7 +71,7 @@ export function validateConfig(config) {
   return config;
 }
 
-export function privateDirectory(path) {
+export function privateDirectory(path: string) {
   mkdirSync(path, { recursive: true, mode: 0o700 });
   const stat = lstatSync(path);
   if (!stat.isDirectory() || stat.uid !== process.getuid()) {
@@ -82,7 +92,7 @@ export function loadConfig(paths = getPaths()) {
   return validateConfig(JSON.parse(readFileSync(paths.configFile, 'utf8')));
 }
 
-export function saveConfig(config, paths = getPaths()) {
+export function saveConfig(config: Config, paths = getPaths()) {
   validateConfig(config);
   privateDirectory(paths.configDir);
   const temporary = `${paths.configFile}.${randomBytes(8).toString('hex')}.tmp`;

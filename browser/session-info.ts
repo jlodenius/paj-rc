@@ -1,11 +1,13 @@
-const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
-const validTokens = value => Number.isSafeInteger(value) && value >= 0;
+import type { SessionState } from './types.js';
 
-export function formatTokens(value) {
+const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+const validTokens = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+export function formatTokens(value: unknown) {
   return validTokens(value) ? compact.format(value).toLowerCase() : '—';
 }
 
-export function sessionInfo(state = {}, fallbackModel) {
+export function sessionInfo(state: SessionState = {}, fallbackModel?: string) {
   const model = state.model && typeof state.model.id === 'string' ? state.model : null;
   const legacy = state.model === undefined && typeof fallbackModel === 'string' ? fallbackModel : '';
   const modelText = model?.id || legacy || 'Model unavailable';

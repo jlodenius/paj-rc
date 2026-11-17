@@ -1,16 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compactProjectPath } from '../public/paths.js';
+import { compactProjectPath } from '../dist/public/paths.js';
 
 const within = width => text => [...text].length <= width;
 
 test('project paths remain complete when they fit', () => {
-  assert.equal(compactProjectPath('/home/jacob/Development/paj', within(100)), '/home/jacob/Development/paj');
+  assert.equal(compactProjectPath('/home/developer/Development/paj', within(100)), '/home/developer/Development/paj');
 });
 
 test('project paths retain the largest suffix of whole directories', () => {
-  assert.equal(compactProjectPath('/home/jacob/Development/paj', within(22)), '../Development/paj');
-  assert.equal(compactProjectPath('/home/jacob/Development/paj', within(10)), '../paj');
+  assert.equal(compactProjectPath('/home/developer/Development/paj', within(22)), '../Development/paj');
+  assert.equal(compactProjectPath('/home/developer/Development/paj', within(10)), '../paj');
 });
 
 test('the current directory is never cut even when no candidate fits', () => {

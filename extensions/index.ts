@@ -1,29 +1,30 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { fileURLToPath } from 'node:url';
-import { getPaths, loadConfig } from '../src/config.js';
-import { ensureService } from '../src/service.js';
-import { createSessionAdapter, isEligible } from '../src/session.js';
-import { createConnector } from '../src/connector.js';
+import { getPaths, loadConfig } from '../dist/src/config.js';
+import { ensureService } from '../dist/src/service.js';
+import { createSessionAdapter, isEligible } from '../dist/src/session.js';
+import type { PajAPI, SessionContext, SessionPI } from '../dist/src/session.js';
+import { createConnector } from '../dist/src/connector.js';
 
 export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
   getPaths, loadConfig, ensureService, createSessionAdapter, createConnector, env: process.env,
 }) {
   let ctx: ExtensionContext | undefined;
-  let paj: any;
-  let adapter: any;
-  let connector: any;
+  let paj: PajAPI | undefined;
+  let adapter: ReturnType<typeof createSessionAdapter> | undefined;
+  let connector: ReturnType<typeof createConnector> | undefined;
   let identityKey: string | undefined;
   let status = 'inactive';
   let refreshHandle: ReturnType<typeof setImmediate> | undefined;
   let configTimer: ReturnType<typeof setInterval> | undefined;
   let setupPending = false;
-  const cliPath = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+  const cliPath = fileURLToPath(new URL('../dist/src/cli.js', import.meta.url));
   const cliCommand = [process.execPath, cliPath]
     .map(value => `'${value.replaceAll("'", "'\\''")}'`).join(' ');
   const queryPaj = () => {
-    let api: any;
-    pi.events.emit('paj:external:v1', { reply: (value: any) => {
-      if (value?.version === 1) api = value;
+    let api: PajAPI | undefined;
+    pi.events.emit('paj:external:v1', { reply: (value: unknown) => {
+      if (value && typeof value === 'object' && 'version' in value && value.version === 1) api = value as PajAPI;
     } });
     return api;
   };
@@ -42,7 +43,7 @@ export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
       paj = queryPaj();
       const snapshot = paj?.getSnapshot();
       const config = dependencies.loadConfig();
-      if (!config || !paj || !isEligible(ctx, snapshot, { env: dependencies.env })) {
+      if (!config || !paj || !isEligible(ctx as unknown as SessionContext, snapshot, { env: dependencies.env })) {
         stopEndpoint();
         status = !config ? 'setup required: use /rc setup' : 'not an eligible main TUI';
         return;
@@ -55,7 +56,7 @@ export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
       }
       stopEndpoint();
       identityKey = key;
-      adapter = dependencies.createSessionAdapter({ pi, ctx, paj, env: dependencies.env });
+      adapter = dependencies.createSessionAdapter({ pi: pi as unknown as SessionPI, ctx: ctx as unknown as SessionContext, paj, env: dependencies.env });
       connector = dependencies.createConnector({ adapter, socketPath: paths.socketPath,
         ensureService: dependencies.ensureService,
         onStatus: (next: string) => { status = next; } });
@@ -111,7 +112,7 @@ export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
             const snapshot = queryPaj()?.getSnapshot();
             return ctx && ctx === setupContext &&
               ctx.sessionManager.getSessionId() === current.sessionManager.getSessionId() &&
-              isEligible(current, snapshot, { env: dependencies.env }) ? snapshot : null;
+              isEligible(current as unknown as SessionContext, snapshot, { env: dependencies.env }) ? snapshot : null;
           };
           const before = eligibleSnapshot();
           if (!before) {

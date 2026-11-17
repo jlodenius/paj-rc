@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getPaths, loadConfig } from '../src/config.js';
-import { ensureService, installService, renderUnit, resolveExecutable, serviceStatus, uninstallService } from '../src/service.js';
-import { main } from '../src/cli.js';
+import { getPaths, loadConfig } from '../dist/src/config.js';
+import { ensureService, installService, renderUnit, resolveExecutable, serviceStatus, uninstallService } from '../dist/src/service.js';
+import { main } from '../dist/src/cli.js';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'paj-rc service %-'));
@@ -13,8 +13,8 @@ function fixture(t) {
   const env = { HOME: root, XDG_CONFIG_HOME: join(root, 'config'), XDG_RUNTIME_DIR: join(root, 'run') };
   const paths = getPaths(env);
   const packageDir = join(root, 'package "with" $ spaces');
-  mkdirSync(join(packageDir, 'src'), { recursive: true });
-  writeFileSync(join(packageDir, 'src', 'cli.js'), '');
+  mkdirSync(join(packageDir, 'dist', 'src'), { recursive: true });
+  writeFileSync(join(packageDir, 'dist', 'src', 'cli.js'), '');
   const pajCommand = join(root, 'paj executable');
   writeFileSync(pajCommand, '#!/bin/sh\nexit 0\n');
   chmodSync(pajCommand, 0o700);

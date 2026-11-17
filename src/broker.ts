@@ -3,20 +3,76 @@ import { mkdir, chmod, lstat, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { readFrames, writeFrame, isMain } from './protocol.js';
 
+import type { Socket } from 'node:net';
+import type { Paths } from './config.js';
+import type { MainIdentity } from './protocol.js';
+
+interface SessionState {
+  busy: boolean;
+  editorBusy: boolean;
+  terminalRequired: boolean;
+  supportsImages?: boolean;
+  runId: string | null;
+  model?: Record<string, string> | null;
+  context?: { tokens: number | null; contextWindow: number } | null;
+}
+interface Command { name: string; source: string; description: string }
+interface Result { state?: SessionState; commands?: Command[]; [key: string]: unknown }
+interface Frame {
+  [key: string]: unknown;
+  type: string;
+  protocol?: number;
+  identity?: MainIdentity;
+  generation?: string;
+  state?: SessionState;
+  id?: string;
+  result?: Result;
+  ok?: boolean;
+  error?: { code?: string; message?: string };
+  seq?: number;
+  event?: { type: string; state?: SessionState };
+}
+interface Pending {
+  timer: ReturnType<typeof setTimeout>;
+  method: string;
+  resolve: (result: Result) => void;
+  reject: (error: Error) => void;
+}
+interface Endpoint {
+  socket: Socket;
+  identity: MainIdentity | null;
+  generation: string | null;
+  state: SessionState | null;
+  seq: number;
+  lastSeen: number;
+  pending: Map<string, Pending>;
+}
+export interface BrokerOptions {
+  paths: Paths;
+  listSessions: () => Promise<unknown>;
+  onEvent?: (name: string, data: unknown) => void;
+  onMembership?: (size: number) => void;
+  heartbeatTimeoutMs?: number;
+  pollIntervalMs?: number;
+  requestTimeoutMs?: number;
+}
+
 export class RemoteError extends Error {
-  constructor(code, message, status = 409) {
+  code: string;
+  status: number;
+  constructor(code: string, message: string, status = 409) {
     super(message);
     this.code = code;
     this.status = status;
   }
 }
 
-function state(value) {
+function state(value: SessionState) {
   if (!value || typeof value.busy !== 'boolean' || typeof value.editorBusy !== 'boolean' ||
       typeof value.terminalRequired !== 'boolean' ||
       (value.supportsImages !== undefined && typeof value.supportsImages !== 'boolean') ||
       !(value.runId === null || typeof value.runId === 'string')) throw new Error('Invalid session state');
-  let model;
+  let model: Record<string, string> | null;
   if (value.model !== undefined) {
     model = null;
     if (value.model !== null) {
@@ -49,7 +105,7 @@ function state(value) {
     ...(typeof value.supportsImages === 'boolean' ? { supportsImages: value.supportsImages } : {}) };
 }
 
-function commandMetadata(value) {
+function commandMetadata(value: Command[]) {
   if (!Array.isArray(value) || value.length > 128) throw new Error('Invalid session commands');
   const seen = new Set();
   return value.map(entry => {
@@ -66,14 +122,14 @@ function commandMetadata(value) {
   });
 }
 
-async function removeStale(path) {
+async function removeStale(path: string) {
   try {
     const info = await lstat(path);
     if (!info.isSocket()) throw new Error('Refusing to replace a non-socket runtime path');
     const occupied = await new Promise(resolve => {
       const probe = createConnection(path);
       probe.once('connect', () => { probe.destroy(); resolve(true); });
-      probe.once('error', error => resolve(error.code !== 'ECONNREFUSED' && error.code !== 'ENOENT'));
+      probe.once('error', (error: NodeJS.ErrnoException) => resolve(error.code !== 'ECONNREFUSED' && error.code !== 'ENOENT'));
       probe.setTimeout(1000, () => { probe.destroy(); resolve(true); });
     });
     if (occupied) throw new Error('Another paj-rc daemon already owns the runtime socket');
@@ -84,25 +140,25 @@ async function removeStale(path) {
 }
 
 export async function startBroker({ paths, listSessions, onEvent = () => {}, onMembership = () => {},
-  heartbeatTimeoutMs = 20000, pollIntervalMs = 5000, requestTimeoutMs = 10000 }) {
+  heartbeatTimeoutMs = 20000, pollIntervalMs = 5000, requestTimeoutMs = 10000 }: BrokerOptions) {
   await mkdir(paths.runtimeDir, { recursive: true, mode: 0o700 });
   const directory = await lstat(paths.runtimeDir);
   if (!directory.isDirectory() || directory.isSymbolicLink() ||
       (process.getuid && directory.uid !== process.getuid())) throw new Error('Unsafe runtime directory');
   await chmod(paths.runtimeDir, 0o700);
   await removeStale(paths.socketPath);
-  const endpoints = new Map();
-  const connections = new Set();
+  const endpoints = new Map<string, Endpoint>();
+  const connections = new Set<Socket>();
   let closed = false;
   let pollPending = false;
 
-  const matches = (record, endpoint) => isMain(record) && record.id === endpoint.identity.id &&
+  const matches = (record: unknown, endpoint: Endpoint) => isMain(record) && record.id === endpoint.identity.id &&
     record.piSessionId === endpoint.identity.piSessionId && record.pid === endpoint.identity.pid;
-  const validate = async endpoint => {
+  const validate = async (endpoint: Endpoint) => {
     const records = await listSessions();
     return Array.isArray(records) && records.some(record => matches(record, endpoint));
   };
-  const remove = endpoint => {
+  const remove = (endpoint: Endpoint) => {
     for (const pending of endpoint.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new RemoteError('disconnected', 'Session disconnected; a submitted write may still run', 503));
@@ -118,11 +174,11 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
     connections.add(socket);
     socket.on('error', () => {});
     socket.setTimeout(heartbeatTimeoutMs, () => socket.destroy());
-    const endpoint = { socket, identity: null, generation: null, state: null,
+    const endpoint: Endpoint = { socket, identity: null, generation: null, state: null,
       seq: 0, lastSeen: Date.now(), pending: new Map() };
     let chain = Promise.resolve();
     let queued = 0;
-    const handle = async frame => {
+    const handle = async (frame: Frame) => {
       if (closed || socket.destroyed) return;
       if (!endpoint.identity) {
         if (frame.type !== 'register' || frame.protocol !== 1 || !isMain(frame.identity) ||
@@ -177,14 +233,14 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
     };
     readFrames(socket, frame => {
       if (++queued > 64) { socket.destroy(); return; }
-      chain = chain.then(() => handle(frame)).catch(() => socket.destroy()).finally(() => queued--);
+      chain = chain.then(() => handle(frame as Frame)).catch(() => { socket.destroy(); }).finally(() => { queued--; });
     });
     socket.on('close', () => { connections.delete(socket); remove(endpoint); });
   });
   server.on('error', () => {});
   let socketInfo;
   try {
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
       server.listen(paths.socketPath, resolve);
     });
@@ -221,7 +277,7 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
         state: endpoint.state,
       }));
     },
-    async request(id, method, params) {
+    async request(id: string, method: string, params: Record<string, unknown>) {
       const endpoint = endpoints.get(id);
       if (!endpoint || endpoint.socket.destroyed) throw new RemoteError('unavailable', 'Main session is unavailable', 404);
       if (!(await validate(endpoint)) || endpoints.get(id) !== endpoint || endpoint.socket.destroyed) {
@@ -232,7 +288,7 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
         throw new RemoteError('stale_generation', 'Session changed; refresh before sending');
       }
       if (endpoint.pending.size >= 16) throw new RemoteError('overloaded', 'Too many pending session requests', 429);
-      return new Promise((resolve, reject) => {
+      return new Promise<Result>((resolve, reject) => {
         const requestId = randomUUID();
         const timer = setTimeout(() => {
           endpoint.pending.delete(requestId);

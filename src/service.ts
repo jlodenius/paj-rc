@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_IDLE_TIMEOUT_MS, DEFAULT_PORT, defaultOrigins, getPaths, loadConfig, privateDirectory, saveConfig } from './config.js';
 
 const UNIT = 'paj-rc.service';
-const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-export function executeSystemctl(args) {
+export function executeSystemctl(args: string[]) {
   return execFileSync('systemctl', ['--user', ...args], {
     encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -17,14 +17,14 @@ export function executeSystemctl(args) {
 
 const executeFile = promisify(execFile);
 
-export async function executeSystemctlAsync(args) {
+export async function executeSystemctlAsync(args: string[]) {
   const result = await executeFile('systemctl', ['--user', ...args], {
     encoding: 'utf8', timeout: 10000,
   });
   return result.stdout;
 }
 
-export function resolveExecutable(command, env = process.env) {
+export function resolveExecutable(command: string, env = process.env) {
   if (typeof command !== 'string' || !command || /[\0\r\n]/.test(command)) {
     throw new Error('Invalid executable');
   }
@@ -40,14 +40,14 @@ export function resolveExecutable(command, env = process.env) {
   throw new Error(`Executable not found: ${command}`);
 }
 
-function unitArgument(value, expandDollar = true) {
+function unitArgument(value: string, expandDollar = true) {
   if (/[\0\r\n]/.test(value)) throw new Error('Unit paths cannot contain control characters');
   let escaped = value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%');
   if (expandDollar) escaped = escaped.replaceAll('$', () => '$$');
   return `"${escaped}"`;
 }
 
-export function renderUnit({ nodePath, cliPath, env = process.env }) {
+export function renderUnit({ nodePath, cliPath, env = process.env }: { nodePath: string; cliPath: string; env?: NodeJS.ProcessEnv }) {
   if (env.PAJ_RUNTIME_DIR !== undefined && (typeof env.PAJ_RUNTIME_DIR !== 'string' ||
       !isAbsolute(env.PAJ_RUNTIME_DIR) || /[\u0000-\u001f\u007f-\u009f]/.test(env.PAJ_RUNTIME_DIR))) {
     throw new Error('PAJ_RUNTIME_DIR must be an absolute path without control characters');
@@ -65,7 +65,7 @@ export async function installService({ approved = false, paths = getPaths(), env
   if (!approved) throw new Error('Setup requires explicit approval (--yes)');
   const node = resolveExecutable(nodePath, env);
   const paj = resolveExecutable(pajCommand, env);
-  const cliPath = realpathSync(join(packageDir, 'src', 'cli.js'));
+  const cliPath = realpathSync(join(packageDir, 'dist', 'src', 'cli.js'));
   const unit = renderUnit({ nodePath: node, cliPath, env });
   const existing = loadConfig(paths);
   const config = existing ? { ...existing, pajCommand: paj } : {

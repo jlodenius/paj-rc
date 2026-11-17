@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { commandSuggestions, insertCommand } from '../public/commands.js';
-import { applySnapshot, createTranscript } from '../public/state.js';
+import { commandSuggestions, insertCommand } from '../dist/public/commands.js';
+import { applySnapshot, createTranscript } from '../dist/public/state.js';
 
 const commands = [
   { name: 'review', description: 'Review changes', source: 'prompt' },

@@ -6,8 +6,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startBroker } from '../src/broker.js';
-import { readFrames, writeFrame } from '../src/protocol.js';
+import { startBroker } from '../dist/src/broker.js';
+import { readFrames, writeFrame } from '../dist/src/protocol.js';
 
 const base = { busy: false, runId: null, editorBusy: false, terminalRequired: false };
 const metadata = { model: { id: 'model', provider: 'provider', name: 'Model' },

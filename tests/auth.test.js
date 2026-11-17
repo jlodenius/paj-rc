@@ -4,7 +4,7 @@ import { mkdtemp, rm, stat, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
-import { createAuth } from '../src/auth.js';
+import { createAuth } from '../dist/src/auth.js';
 
 const request = token => ({ headers: { cookie: `paj_rc_session=${token}` } });
 const tokenOf = login => login.cookie.split(';')[0].slice('paj_rc_session='.length);

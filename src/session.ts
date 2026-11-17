@@ -1,10 +1,94 @@
 import { randomUUID } from 'node:crypto';
 import { validateImages, hashImages } from './images.js';
-import { boundedMessageText as boundedText, MESSAGE_TEXT_LIMIT as TEXT_LIMIT } from '../public/text.js';
+import { boundedMessageText as boundedText, MESSAGE_TEXT_LIMIT as TEXT_LIMIT } from '../browser/text.js';
+import type { MainIdentity } from './protocol.js';
 
-const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
+export interface PajSnapshot {
+  identity: MainIdentity & { spawnId?: string; parentTaskId?: string; taskId?: string;
+    child?: boolean; parentSessionId?: string; childTaskId?: string };
+  editorBusy?: boolean;
+}
+export interface PajAPI {
+  version: number;
+  getSnapshot(): PajSnapshot;
+  tryReserve(token: string): boolean;
+  release(token: string): unknown;
+}
+interface ContentPart { type: string; text?: string }
+interface SourceMessage {
+  role: string;
+  content?: string | ContentPart[];
+  display?: boolean;
+  toolName?: string;
+  isError?: boolean;
+  customType?: string;
+  timestamp?: number;
+  toolCallId?: string;
+}
+interface Entry extends SourceMessage { id: string; type: string; message?: SourceMessage }
+export interface SessionContext {
+  mode: string;
+  hasUI: boolean;
+  sessionManager: { getSessionId(): string; getBranch(): Entry[] };
+  isIdle(): boolean;
+  abort(): unknown;
+  model?: { input?: string[]; id?: string; provider?: string; name?: string };
+  getContextUsage?(): { tokens: number | null; contextWindow: number };
+}
+interface Command { name: string; description?: string; source: string }
+interface PiEvent {
+  message?: SourceMessage;
+  assistantMessageEvent?: { type: string; delta?: string };
+  toolCallId?: string;
+  toolName?: string;
+}
+export interface SessionPI {
+  getCommands?(): Command[];
+  on(name: string, handler: (event: PiEvent, ctx: SessionContext) => void): (() => void) | void;
+  sendUserMessage(content: string | ({ type: string; text?: string; mimeType?: string; data?: string })[],
+    options: { expandPromptTemplates: boolean; deliverAs?: string }): unknown;
+}
+interface ProjectedMessage { id: string; role: string; text: string; imageCount?: number; customType?: string }
+interface Overlay {
+  message: ProjectedMessage;
+  source: WeakRef<SourceMessage>;
+  role: string;
+  timestamp?: number;
+  toolCallId?: string;
+  customType?: string;
+  after: string | null;
+}
+export interface RequestParams {
+  generation: string;
+  before?: string;
+  requestId?: string;
+  text?: string;
+  deliverAs?: string;
+  images?: unknown;
+  runId?: string;
+}
+interface Submission {
+  text: string;
+  deliverAs: string;
+  imageHash: string;
+  result?: { status: string; requestId: string };
+  error?: { code: string; message: string };
+}
+export interface SessionEvent { type: string; [key: string]: unknown }
+export interface EventFrame { type: string; seq: number; event: SessionEvent }
+interface AdapterOptions {
+  pi: SessionPI;
+  ctx: SessionContext;
+  paj: PajAPI;
+  env?: NodeJS.ProcessEnv;
+  pid?: number;
+  uuid?: () => string;
+  dedupLimit?: number;
+}
 
-export function isEligible(ctx, snapshot, { env = process.env, pid = process.pid } = {}) {
+const fail = (code: string, message: string) => { throw Object.assign(new Error(message), { code }); };
+
+export function isEligible(ctx: SessionContext, snapshot: PajSnapshot, { env = process.env, pid = process.pid } = {}) {
   const identity = snapshot?.identity;
   return ctx?.mode === 'tui' && ctx.hasUI === true && identity?.role === 'primary' &&
     identity.pid === pid && identity.piSessionId === ctx.sessionManager.getSessionId() &&
@@ -16,7 +100,7 @@ export function isEligible(ctx, snapshot, { env = process.env, pid = process.pid
     (!env.PAJ_ROLE || env.PAJ_ROLE === 'primary');
 }
 
-function textContent(content) {
+function textContent(content: SourceMessage['content']) {
   if (typeof content === 'string') return boundedText(content);
   if (!Array.isArray(content)) return '';
   let text = '';
@@ -29,7 +113,7 @@ function textContent(content) {
   return boundedText(text);
 }
 
-export function projectMessage(message, id) {
+export function projectMessage(message: SourceMessage, id: string): ProjectedMessage | null {
   if (!message || (!['user', 'assistant', 'toolResult'].includes(message.role) &&
       !(message.role === 'custom' && message.display === true))) return null;
   const role = message.role === 'toolResult' ? 'tool'
@@ -46,7 +130,7 @@ export function projectMessage(message, id) {
       ? { customType: 'paj-messages' } : {}) } : null;
 }
 
-function commandCatalog(pi) {
+function commandCatalog(pi: SessionPI) {
   try {
     if (typeof pi.getCommands !== 'function') return undefined;
     const catalog = pi.getCommands();
@@ -72,17 +156,17 @@ function commandCatalog(pi) {
   }
 }
 
-function modelMetadata(model) {
-  const result = {};
+function modelMetadata(model: SessionContext['model']) {
+  const result: Record<string, string> = {};
   for (const key of ['id', 'provider', 'name']) {
-    const value = model?.[key];
+    const value = model?.[key as 'id' | 'provider' | 'name'];
     if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f\u007f]/u.test(value)) return null;
     result[key] = value.slice(0, 200);
   }
   return result;
 }
 
-function contextMetadata(ctx) {
+function contextMetadata(ctx: SessionContext) {
   try {
     const usage = ctx.getContextUsage?.();
     if (!Number.isSafeInteger(usage?.contextWindow) || usage.contextWindow <= 0) return null;
@@ -94,25 +178,25 @@ function contextMetadata(ctx) {
 }
 
 export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = process.pid,
-  uuid = randomUUID, dedupLimit = 512 }) {
+  uuid = randomUUID, dedupLimit = 512 }: AdapterOptions) {
   const sessionId = ctx.sessionManager.getSessionId();
   const identity = paj.getSnapshot().identity;
   const generation = uuid();
-  const listeners = new Set();
-  const dedup = new Map();
-  const leases = new Set();
-  const unsubscribers = [];
+  const listeners = new Set<(frame: EventFrame) => void>();
+  const dedup = new Map<string, Submission>();
+  const leases = new Set<string>();
+  const unsubscribers: (() => void)[] = [];
   let closed = false;
   let modelCtx = ctx;
   let seq = 0;
   let runId = ctx.isIdle() ? null : uuid();
-  let leaseRunId = null;
+  let leaseRunId: string | null = null;
   let terminalDepth = 0;
-  let partial = null;
-  let finalized = [];
-  let reconcileImmediate;
-  let metadataImmediate;
-  let reconcileTimer;
+  let partial: ProjectedMessage | null = null;
+  let finalized: Overlay[] = [];
+  let reconcileImmediate: ReturnType<typeof setImmediate>;
+  let metadataImmediate: ReturnType<typeof setImmediate>;
+  let reconcileTimer: ReturnType<typeof setTimeout>;
   let reconcileDelay = 25;
 
   const eligible = () => !closed && paj.version === 1 &&
@@ -126,7 +210,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     terminalRequired: terminalDepth > 0,
     supportsImages: Array.isArray(modelCtx.model?.input) && modelCtx.model.input.includes('image'),
     model: modelMetadata(modelCtx.model), context: contextMetadata(modelCtx) });
-  const emit = (event) => {
+  const emit = (event: SessionEvent) => {
     if (!eligible()) return;
     const frame = { type: 'event', seq: ++seq, event };
     for (const listener of listeners) {
@@ -143,7 +227,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     });
     metadataImmediate.unref?.();
   };
-  const entryMessage = (entry) => entry.type === 'message' ? entry.message
+  const entryMessage = (entry: Entry) => entry.type === 'message' ? entry.message
     : entry.type === 'custom_message' ? { ...entry, role: 'custom' } : null;
   // Later async message_end handlers can postpone persistence beyond any event-loop boundary.
   const reconcileFinalized = (branch = ctx.sessionManager.getBranch()) => {
@@ -201,7 +285,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     leases.clear();
     leaseRunId = null;
   };
-  const on = (name, handler) => {
+  const on = (name: string, handler: (event: PiEvent, ctx: SessionContext) => void) => {
     const unsubscribe = pi.on(name, (event, currentCtx) => {
       if (!eligible() || currentCtx?.sessionManager.getSessionId() !== sessionId) return;
       modelCtx = currentCtx;
@@ -297,7 +381,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
       text: `${String(event.toolName).slice(0, 100)}: running` } });
   });
 
-  function validateTarget(params) {
+  function validateTarget(params: RequestParams) {
     assertEligible();
     if (params?.generation !== generation) fail('stale_generation', 'Session generation changed');
   }
@@ -306,15 +390,15 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     identity,
     eligible,
     state,
-    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    subscribe(listener: (frame: EventFrame) => void) { listeners.add(listener); return () => listeners.delete(listener); },
     notifyState() { emit({ type: 'state', state: state() }); },
-    snapshot(params) {
+    snapshot(params: RequestParams) {
       validateTarget(params);
-      const messages = [];
+      const messages: ProjectedMessage[] = [];
       let cursorSeen = params.before == null;
       const branch = ctx.sessionManager.getBranch();
       if (reconcileFinalized(branch)) emit({ type: 'reset' });
-      const append = (message) => {
+      const append = (message: ProjectedMessage | null) => {
         if (!message) return;
         if (!cursorSeen) {
           if (message.id === params.before) cursorSeen = true;
@@ -339,7 +423,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
         ...(commands === undefined ? {} : { commands: commands.slice(0, 128) }),
         hasMore, before: hasMore ? messages[0].id : null };
     },
-    prompt(params) {
+    prompt(params: RequestParams) {
       validateTarget(params);
       const { requestId, text, deliverAs } = params;
       const images = validateImages(params.images);
@@ -374,7 +458,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
         leases.add(token);
         leaseRunId = queueDuringRun ? runId : null;
       }
-      const record = { text, deliverAs, imageHash };
+      const record: Submission = { text, deliverAs, imageHash };
       dedup.set(requestId, record);
       while (dedup.size > Math.max(1, dedupLimit)) dedup.delete(dedup.keys().next().value);
       try {
@@ -401,7 +485,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
         fail(record.error.code, record.error.message);
       }
     },
-    abort(params) {
+    abort(params: RequestParams) {
       validateTarget(params);
       if (paj.getSnapshot().editorBusy) fail('editor_busy', 'An editor request owns this session');
       if (!runId || params.runId !== runId || ctx.isIdle()) {

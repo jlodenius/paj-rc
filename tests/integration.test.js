@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startDaemon } from '../src/daemon.js';
-import { createSessionAdapter } from '../src/session.js';
-import { createConnector } from '../src/connector.js';
+import { startDaemon } from '../dist/src/daemon.js';
+import { createSessionAdapter } from '../dist/src/session.js';
+import { createConnector } from '../dist/src/connector.js';
 
 async function until(predicate, timeout = 2000) {
   const end = Date.now() + timeout;
@@ -120,7 +120,7 @@ test('two live adapters expose separate chats, keep work alive on browser loss, 
     ['First steering instruction', 'Second steering instruction']);
   assert.equal(second.submitted.length, 0);
   const image = { mimeType: 'image/png', data: (await readFile(
-    new URL('../public/icons/icon-192.png', import.meta.url))).toString('base64') };
+    new URL('../dist/public/icons/icon-192.png', import.meta.url))).toString('base64') };
   const photoInput = { generation: resumed.generation, requestId: randomUUID(),
     text: '', images: [image], deliverAs: 'steer' };
   const photo = await fetch(`${daemon.address}${route}/image-prompt`, { method: 'POST', headers,

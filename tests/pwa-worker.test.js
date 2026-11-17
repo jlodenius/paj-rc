@@ -12,7 +12,7 @@ const shell = [
   '/fonts/firacode-OFL.txt', '/fonts/spacegrotesk-OFL.txt',
   '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png', '/icons/apple-touch-icon.png',
 ];
-const source = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../dist/public/sw.js', import.meta.url), 'utf8');
 
 function worker() {
   const listeners = new Map();
@@ -145,7 +145,7 @@ test('failed shell install does not cache error pages', async () => {
 });
 
 test('registration requires a secure context and service worker support', async () => {
-  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../dist/public/app.js', import.meta.url), 'utf8');
   const registration = app.slice(app.indexOf('if (globalThis.isSecureContext'), app.indexOf('const $'));
   vm.runInNewContext(registration, {});
   let calls = 0;
@@ -164,13 +164,13 @@ test('registration requires a secure context and service worker support', async 
 });
 
 test('manifest and HTML expose native installation metadata and steering defaults', async () => {
-  const manifest = JSON.parse(await readFile(new URL('../public/manifest.webmanifest', import.meta.url)));
+  const manifest = JSON.parse(await readFile(new URL('../dist/public/manifest.webmanifest', import.meta.url)));
   assert.equal(manifest.name, 'paj-rc');
   assert.equal(manifest.id, '/');
   assert.equal(manifest.start_url, '/');
   assert.equal(manifest.scope, '/');
   assert.equal(manifest.display, 'standalone');
-  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const html = await readFile(new URL('../dist/public/index.html', import.meta.url), 'utf8');
   assert.match(html, /rel="manifest" href="\/manifest.webmanifest"/);
   assert.match(html, /rel="apple-touch-icon" href="\/icons\/apple-touch-icon.png"/);
   assert.match(html, /<select id="deliver-as"><option value="steer" selected>/);
@@ -178,7 +178,7 @@ test('manifest and HTML expose native installation metadata and steering default
   assert.match(html, /<option value="followUp">/);
   for (const [name, size] of [['icon-192.png', 192], ['icon-512.png', 512],
     ['apple-touch-icon.png', 180]]) {
-    const png = await readFile(new URL(`../public/icons/${name}`, import.meta.url));
+    const png = await readFile(new URL(`../dist/public/icons/${name}`, import.meta.url));
     assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
     assert.equal(png.readUInt32BE(16), size);
     assert.equal(png.readUInt32BE(20), size);

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createConnector } from '../src/connector.js';
+import { createConnector } from '../dist/src/connector.js';
 
 async function until(check) {
   for (let i = 0; i < 150; i++) {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createTranscript, applySnapshot, applyEvent, prependHistory } from '../public/state.js';
+import { createTranscript, applySnapshot, applyEvent, prependHistory } from '../dist/public/state.js';
 
 function snapshot(overrides = {}) {
   return {
@@ -87,9 +87,9 @@ test('pagination preserves current message and live sequence, deduplicates overl
 });
 
 test('browser assets contain no HTML transcript injection or external runtime dependencies', async () => {
-  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
-  const css = await readFile(new URL('../public/style.css', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../dist/public/app.js', import.meta.url), 'utf8');
+  const html = await readFile(new URL('../dist/public/index.html', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../dist/public/style.css', import.meta.url), 'utf8');
   assert.doesNotMatch(app, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   assert.doesNotMatch(html + css, /https?:\/\/|@import/);
   assert.match(app, /text\.textContent = message\.text/);

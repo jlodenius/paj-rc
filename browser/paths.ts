@@ -1,4 +1,4 @@
-export function compactProjectPath(path, fits) {
+export function compactProjectPath(path: string, fits: (text: string) => boolean) {
   if (fits(path)) return path;
   const directories = path.split('/').filter(Boolean);
   for (let start = 1; start < directories.length; start++) {
