@@ -1,6 +1,6 @@
 # paj-rc
 
-Private browser control for live main [Pi](https://github.com/badlogic/pi-mono) sessions through
+Private browser control for live main [Pi](https://github.com/earendil-works/pi) sessions through
 [Paj](https://github.com/jlodenius/paj). Requires Linux, a systemd user manager, Node.js 22.19+,
 Pi 1.2+, and the latest Paj CLI and extension.
 
