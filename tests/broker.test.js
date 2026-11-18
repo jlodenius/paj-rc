@@ -13,13 +13,13 @@ const base = { busy: false, runId: null, editorBusy: false, terminalRequired: fa
 const metadata = { model: { id: 'model', provider: 'provider', name: 'Model' },
   context: { tokens: null, contextWindow: 200000 } };
 
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const runtimeDir = await mkdtemp(join(tmpdir(), 'paj-rc-broker-'));
   const identity = { id: 'main', piSessionId: 'pi', pid: process.pid, role: 'primary' };
   const events = [];
   const paths = { runtimeDir, socketPath: join(runtimeDir, 'rc.sock') };
   const broker = await startBroker({ paths, listSessions: async () => [identity],
-    onEvent: (type, value) => events.push({ type, value }) });
+    onEvent: (type, value) => events.push({ type, value }), ...options });
   t.after(async () => { await broker.close(); await rm(runtimeDir, { recursive: true, force: true }); });
   async function connect(state) {
     const socket = createConnection(paths.socketPath);
@@ -40,6 +40,96 @@ async function until(predicate) {
   }
   assert.fail('Timed out waiting for broker');
 }
+
+test('Captain badge follows only fresh identity-matched registry capability, never endpoint claims', async t => {
+  const token = '019ab311-a8dc-7000-8000-000000000001';
+  const identity = { id: 'main', piSessionId: 'pi', pid: process.pid, role: 'primary' };
+  let record = { ...identity, captainInspection: token, lastHeartbeatMs: Date.now() };
+  let failed = false;
+  const { broker, connect, events } = await fixture(t, { pollIntervalMs: 10,
+    listSessions: async () => { if (failed) throw new Error('unavailable'); return [record]; } });
+  const socket = await connect({ ...base, captain: true });
+  await until(() => broker.size === 1);
+  assert.equal(broker.list()[0].captain, true, 'initial registry snapshot');
+  assert.doesNotMatch(JSON.stringify(broker.list()), new RegExp(token));
+  for (const capability of [undefined, null, false, true, 'true', '', 'not-a-uuid']) {
+    record = { ...identity, captainInspection: capability, lastHeartbeatMs: Date.now() };
+    await until(() => broker.list()[0]?.captain === false);
+    record.captainInspection = token;
+    await until(() => broker.list()[0]?.captain === true);
+  }
+  for (const heartbeat of [undefined, 'now', Date.now() - 61000, Date.now() + 60000]) {
+    record = { ...identity, captainInspection: token, lastHeartbeatMs: heartbeat };
+    await until(() => broker.list()[0]?.captain === false);
+    record.lastHeartbeatMs = Date.now();
+    await until(() => broker.list()[0]?.captain === true);
+  }
+  writeFrame(socket, { type: 'event', seq: 1,
+    event: { type: 'state', state: { ...base, captain: false } } });
+  await until(() => events.some(event => event.type === 'session'));
+  assert.equal(broker.list()[0].captain, true, 'endpoint state cannot override registry');
+  assert.ok(events.filter(event => event.type === 'sessions').length > 2, 'changes notify browsers');
+  failed = true;
+  await until(() => broker.list().length === 0);
+  failed = false;
+  record = { ...identity };
+  await connect(base);
+  await until(() => broker.list()[0]?.captain === false);
+  assert.equal(broker.list()[0].captain, false, 'reconnect never retains an old capability');
+  record = { ...identity, pid: process.pid + 1, captainInspection: token, lastHeartbeatMs: Date.now() };
+  await until(() => broker.list().length === 0);
+});
+
+test('Captain capability expires even while a registry poll is stuck', async t => {
+  const now = Date.now;
+  let instant = now();
+  Date.now = () => instant;
+  t.after(() => { Date.now = now; });
+  const identity = { id: 'main', piSessionId: 'pi', pid: process.pid, role: 'primary',
+    captainInspection: '019ab311-a8dc-7000-8000-000000000001', lastHeartbeatMs: instant };
+  let reads = 0;
+  let finish;
+  const { broker, connect, events } = await fixture(t, { pollIntervalMs: 10,
+    listSessions: async () => ++reads === 1 ? [identity] : new Promise(resolve => { finish = resolve; }) });
+  await connect(base);
+  await until(() => broker.size === 1);
+  assert.equal(broker.list()[0].captain, true);
+  await until(() => finish);
+  instant += 61000;
+  await until(() => events.filter(event => event.type === 'sessions').length > 1);
+  assert.equal(broker.list()[0].captain, false);
+  finish([identity]);
+  await delay(15);
+  assert.equal(broker.list()[0]?.captain ?? false, false, 'late stale result cannot revive badge');
+});
+
+test('late registry polls cannot restore Captain capability after a newer validation', async t => {
+  const identity = { id: 'main', piSessionId: 'pi', pid: process.pid, role: 'primary' };
+  const active = { ...identity, captainInspection: '019ab311-a8dc-7000-8000-000000000001',
+    lastHeartbeatMs: Date.now() };
+  let reads = 0;
+  let finish;
+  const { broker, connect } = await fixture(t, { pollIntervalMs: 10,
+    listSessions: async () => {
+      reads++;
+      if (reads === 1) return [active];
+      if (reads === 3) return [identity];
+      return new Promise(resolve => { finish = resolve; });
+    } });
+  const socket = await connect(base);
+  await until(() => broker.list()[0]?.captain === true);
+  await until(() => finish);
+  readFrames(socket, frame => {
+    if (frame.type === 'request') writeFrame(socket, { type: 'response', id: frame.id, ok: true,
+      result: { state: base, messages: [] } });
+  });
+  await broker.request('main', 'snapshot', {});
+  assert.equal(broker.list()[0].captain, false, 'newer request validation observes revocation');
+  const oldPoll = finish;
+  oldPoll([active]);
+  await delay(15);
+  assert.equal(broker.list()[0].captain, false, 'older poll cannot overwrite newer validation');
+});
 
 test('broker accepts legacy state and whitelists metadata across registration, events and snapshots', async t => {
   const { broker, connect, events } = await fixture(t);

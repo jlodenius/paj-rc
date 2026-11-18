@@ -40,6 +40,7 @@ export interface Envelope {
 }
 export interface Session {
   id: string;
+  captain?: boolean;
   generation: string;
   state: SessionState;
   name?: string;

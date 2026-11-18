@@ -129,6 +129,19 @@ h6::before { content: '###### '; }
 .session-card:hover:not(:disabled) { background: var(--selected); }
 .session-card[aria-current="true"] { background: var(--selected); border-left-color: var(--accent); }
 .session-title { max-width: 100%; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.captain-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--text);
+  background: var(--selected);
+  font: 500 10px/1.5 var(--mono);
+  letter-spacing: 0;
+  vertical-align: middle;
+  white-space: nowrap;
+}
 .session-project { max-width: 100%; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .agent-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; max-width: 100%; color: var(--muted); font-size: 10px; }
 .agent-model { min-width: 0; max-width: 100%; color: var(--text); overflow-wrap: anywhere; }

@@ -43,6 +43,11 @@ Pi and its tools. The service is not enabled at login. Use `paj-rc --help` for s
 Select a session and type `/` for skills and prompt templates. Insert a suggestion, add arguments,
 then send. Steering and follow-ups require an explicit choice; uncertain writes are never retried.
 
+A **Captain** badge marks sessions with Paj's live Captain capability. It follows the existing registry
+poll (normally every five seconds), not names or historic mode entries. Missing, malformed, or stale
+capabilities show no badge; badges are hidden while reconnecting or awaiting a fresh session list.
+This is an advisory capability indicator, not authorization or an instantaneous runtime-mode guarantee.
+
 ## Private remote access
 
 With Tailscale installed on both devices, inspect existing routes before adding private HTTPS.

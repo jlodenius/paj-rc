@@ -51,6 +51,7 @@ $('composer').prepend(workingIndicator);
 let csrfToken: string;
 let stream: EventSource | null;
 let connected = false;
+let captainSynced = false;
 let sessions: Session[] = [];
 let selected: Session | null = null;
 let transcript = createTranscript();
@@ -373,6 +374,10 @@ function start() {
   source.onerror = () => {
     if (stream !== source) return;
     connected = false;
+    captainSynced = false;
+    listVersion++;
+    renderSessions();
+    renderHeader();
     synced = false;
     $('connection').textContent = 'Reconnecting…';
     $('connection').classList.remove('online');
@@ -409,11 +414,15 @@ function start() {
 
 async function refreshSessions(resnapshot = false) {
   const version = ++listVersion;
+  captainSynced = false;
+  renderSessions();
+  renderHeader();
   try {
     const data = await api('/api/sessions');
     if (version !== listVersion || !authenticated) return;
     imageUploads = data.imageUploads === true;
     sessions = data.sessions;
+    captainSynced = connected;
     if (selected) {
       const next = sessions.find(session => session.id === selected.id);
       if (!next) {
@@ -432,7 +441,22 @@ async function refreshSessions(resnapshot = false) {
     renderSessions();
     renderHeader();
     renderControls();
-  } catch (error) { notice(error.message); }
+  } catch (error) {
+    if (version !== listVersion || !authenticated) return;
+    captainSynced = false;
+    renderSessions();
+    renderHeader();
+    notice(error.message);
+  }
+}
+
+function appendCaptainBadge(node: HTMLElement, session: Session | null) {
+  if (!connected || !captainSynced || session?.captain !== true) return;
+  const badge = document.createElement('span');
+  badge.className = 'captain-badge';
+  badge.textContent = 'Captain';
+  badge.title = 'Captain mode is enabled';
+  node.append(' ', badge);
 }
 
 function renderSessions() {
@@ -444,6 +468,7 @@ function renderSessions() {
     const title = document.createElement('span');
     title.className = 'session-title';
     title.textContent = session.name || 'Unnamed session';
+    appendCaptainBadge(title, session);
     const context = document.createElement('span');
     context.className = 'session-project';
     context.textContent = session.projectRoot || 'No project';
@@ -547,6 +572,7 @@ async function refreshSnapshot() {
 
 function renderHeader() {
   $('session-name').textContent = selected?.name || 'Choose a session';
+  appendCaptainBadge($('session-name'), selected);
   const context = $('session-context');
   headerPath = null;
   if (!selected) {

@@ -45,6 +45,9 @@ interface Endpoint {
   state: SessionState | null;
   seq: number;
   lastSeen: number;
+  captain: boolean;
+  captainExpiresAt: number;
+  registryRead: number;
   pending: Map<string, Pending>;
 }
 export interface BrokerOptions {
@@ -151,12 +154,37 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
   const connections = new Set<Socket>();
   let closed = false;
   let pollPending = false;
+  let registryRead = 0;
 
   const matches = (record: unknown, endpoint: Endpoint) => isMain(record) && record.id === endpoint.identity.id &&
     record.piSessionId === endpoint.identity.piSessionId && record.pid === endpoint.identity.pid;
+  const updateCaptain = (endpoint: Endpoint, record: unknown, read = endpoint.registryRead) => {
+    if (read < endpoint.registryRead) return;
+    endpoint.registryRead = read;
+    const value = record as { captainInspection?: unknown; lastHeartbeatMs?: unknown } | undefined;
+    const heartbeat = value?.lastHeartbeatMs;
+    const now = Date.now();
+    const captain = typeof value?.captainInspection === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.captainInspection) &&
+      typeof heartbeat === 'number' && Number.isSafeInteger(heartbeat) &&
+      heartbeat <= now && now - heartbeat <= 60000;
+    endpoint.captainExpiresAt = captain ? heartbeat + 60000 : 0;
+    if (captain !== endpoint.captain) {
+      endpoint.captain = captain;
+      if (endpoints.get(endpoint.identity.id) === endpoint) onEvent('sessions', {});
+    }
+  };
+  const expireCaptains = () => {
+    for (const endpoint of endpoints.values()) {
+      if (endpoint.captain && Date.now() > endpoint.captainExpiresAt) updateCaptain(endpoint, undefined);
+    }
+  };
   const validate = async (endpoint: Endpoint) => {
+    const read = ++registryRead;
     const records = await listSessions();
-    return Array.isArray(records) && records.some(record => matches(record, endpoint));
+    const record = Array.isArray(records) ? records.find(record => matches(record, endpoint)) : undefined;
+    updateCaptain(endpoint, record, read);
+    return Boolean(record);
   };
   const remove = (endpoint: Endpoint) => {
     for (const pending of endpoint.pending.values()) {
@@ -175,7 +203,7 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
     socket.on('error', () => {});
     socket.setTimeout(heartbeatTimeoutMs, () => socket.destroy());
     const endpoint: Endpoint = { socket, identity: null, generation: null, state: null,
-      seq: 0, lastSeen: Date.now(), pending: new Map() };
+      seq: 0, lastSeen: Date.now(), captain: false, captainExpiresAt: 0, registryRead: 0, pending: new Map() };
     let chain = Promise.resolve();
     let queued = 0;
     const handle = async (frame: Frame) => {
@@ -252,16 +280,23 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
     throw error;
   }
   const timer = setInterval(async () => {
+    expireCaptains();
     if (pollPending || closed) return;
     pollPending = true;
+    const read = ++registryRead;
+    const polled = [...endpoints.values()];
     try {
       const records = await listSessions();
-      for (const endpoint of endpoints.values()) {
-        if (Date.now() - endpoint.lastSeen > heartbeatTimeoutMs ||
-            !Array.isArray(records) || !records.some(record => matches(record, endpoint))) endpoint.socket.destroy();
+      for (const endpoint of polled) {
+        if (endpoints.get(endpoint.identity.id) !== endpoint || endpoint.registryRead > read) continue;
+        const record = Array.isArray(records) ? records.find(record => matches(record, endpoint)) : undefined;
+        updateCaptain(endpoint, record, read);
+        if (Date.now() - endpoint.lastSeen > heartbeatTimeoutMs || !record) endpoint.socket.destroy();
       }
     } catch {
-      for (const endpoint of endpoints.values()) endpoint.socket.destroy();
+      for (const endpoint of polled) {
+        if (endpoints.get(endpoint.identity.id) === endpoint && endpoint.registryRead <= read) endpoint.socket.destroy();
+      }
     } finally { pollPending = false; }
   }, pollIntervalMs);
   timer.unref();
@@ -269,12 +304,13 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
   return {
     get size() { return endpoints.size; },
     list() {
+      expireCaptains();
       return [...endpoints.values()].filter(endpoint => !endpoint.socket.destroyed).map(endpoint => ({
         id: endpoint.identity.id, piSessionId: endpoint.identity.piSessionId, generation: endpoint.generation,
         name: String(endpoint.identity.name ?? 'Agent').slice(0, 200),
         projectRoot: String(endpoint.identity.projectRoot ?? '').slice(0, 4096),
         branch: typeof endpoint.identity.branch === 'string' ? endpoint.identity.branch.slice(0, 500) : null,
-        state: endpoint.state,
+        state: endpoint.state, captain: endpoint.captain,
       }));
     },
     async request(id: string, method: string, params: Record<string, unknown>) {

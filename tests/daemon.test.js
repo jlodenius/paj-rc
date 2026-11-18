@@ -66,6 +66,37 @@ async function endpoint(t, path, identity, options = {}) {
   return socket;
 }
 
+test('authenticated session API exposes only a live Captain boolean and publishes capability changes', async t => {
+  const token = '019ab311-a8dc-7000-8000-000000000001';
+  const identity = { id: randomUUID(), piSessionId: randomUUID(), pid: process.pid, role: 'primary' };
+  let record = { ...identity, captainInspection: token, lastHeartbeatMs: Date.now() };
+  const { daemon, config, request } = await fixture(t, { listSessions: async () => [record],
+    brokerOptions: { pollIntervalMs: 10 } });
+  const socket = await endpoint(t, daemon.socketPath, identity);
+  await once(socket, 'registered');
+  const headers = await pair(request, config.pairingKey);
+  const initial = await request('/api/sessions', { headers });
+  assert.equal(initial.headers.get('cache-control'), 'no-store');
+  const data = await initial.json();
+  assert.equal(data.sessions[0].captain, true);
+  assert.doesNotMatch(JSON.stringify(data), new RegExp(token));
+  const controller = new AbortController();
+  const stream = await request('/api/events', { headers, signal: controller.signal });
+  const reader = stream.body.getReader();
+  t.after(() => { controller.abort(); reader.cancel().catch(() => {}); });
+  await reader.read();
+  record = { ...identity };
+  let received = '';
+  while (!received.includes('event: sessions')) {
+    const chunk = await reader.read();
+    assert.equal(chunk.done, false);
+    received += new TextDecoder().decode(chunk.value);
+  }
+  const updated = await (await request('/api/sessions', { headers })).json();
+  assert.equal(updated.sessions[0].captain, false);
+  assert.doesNotMatch(received, new RegExp(token));
+});
+
 test('browser must pair before accessing sessions and use CSRF protection for writes', async t => {
   const { config, request } = await fixture(t);
   assert.equal((await request('/api/sessions')).status, 401);

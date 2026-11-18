@@ -25,6 +25,89 @@ class Element {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('Captain badges require a fresh connected session list and follow activation, revocation and reconnect', async () => {
+  const globals = { document: globalThis.document, fetch: globalThis.fetch, EventSource: globalThis.EventSource };
+  const elements = new Map();
+  const session = { id: 'captain', name: 'Main', generation: 'generation', state: {}, captain: true };
+  const ordinary = { ...session, id: 'ordinary', name: 'Captain by name only', captain: undefined };
+  let source;
+  let pendingList;
+  let holdList = false;
+  let failList = false;
+  globalThis.document = {
+    getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
+    createElement() { return new Element(); },
+  };
+  globalThis.EventSource = class {
+    constructor() { source = this; this.listeners = {}; }
+    addEventListener(type, callback) { this.listeners[type] = callback; }
+    close() {}
+  };
+  globalThis.fetch = async url => {
+    let data;
+    if (url === '/api/auth') data = { authenticated: true };
+    else if (url === '/api/sessions') {
+      if (failList) throw new Error('offline');
+      data = { sessions: structuredClone([session, ordinary]) };
+      if (holdList) await new Promise(resolve => { pendingList = resolve; });
+    } else if (url.endsWith('/snapshot')) data = { generation: 'generation', seq: 0,
+      state: {}, messages: [], hasMore: false };
+    else throw new Error(`Unexpected URL: ${url}`);
+    return { ok: true, json: async () => structuredClone(data) };
+  };
+  const badges = node => (node?.children || []).flatMap(child => typeof child === 'string' ? [] :
+    [...(child.className === 'captain-badge' ? [child] : []), ...badges(child)]);
+  const count = () => badges(elements.get('sessions')).length;
+  try {
+    await import(`../dist/public/app.js?captain=${Date.now()}`);
+    await settle();
+    source.onopen();
+    await settle();
+    assert.equal(count(), 1, 'initial live list');
+    assert.equal(badges(elements.get('sessions'))[0].textContent, 'Captain');
+    elements.get('sessions').children[0].onclick();
+    await settle();
+    assert.equal(badges(elements.get('session-name')).length, 1, 'selected heading');
+    for (const value of [false, undefined, 'true', true]) {
+      session.captain = value;
+      source.listeners.sessions();
+      await settle();
+      assert.equal(count(), value === true ? 1 : 0);
+      assert.equal(badges(elements.get('session-name')).length, value === true ? 1 : 0);
+    }
+    holdList = true;
+    source.listeners.sessions();
+    await settle();
+    assert.equal(count(), 0, 'pending refresh cannot keep an unverified badge indefinitely');
+    source.onerror();
+    assert.equal(count(), 0, 'hide immediately on interrupted stream');
+    assert.equal(badges(elements.get('session-name')).length, 0);
+    const oldList = pendingList;
+    source.onopen();
+    assert.equal(count(), 0, 'reconnect waits for a fresh list');
+    await settle();
+    oldList();
+    await settle();
+    assert.equal(count(), 0, 'pre-interruption list response cannot revive badge after reopen');
+    session.captain = false;
+    pendingList();
+    await settle();
+    assert.equal(count(), 1);
+    holdList = false;
+    source.listeners.sessions();
+    await settle();
+    assert.equal(count(), 0, 'revocation during outage replaces cached activation');
+    session.captain = true;
+    source.listeners.sessions();
+    await settle();
+    assert.equal(count(), 1);
+    failList = true;
+    source.listeners.sessions();
+    await settle();
+    assert.equal(count(), 0, 'failed list refresh hides unverified capability');
+  } finally { Object.assign(globalThis, globals); }
+});
+
 test('browser subscribes before snapshot, reconciles buffered deltas, and never retries uncertain writes', async () => {
   const globals = { document: globalThis.document, fetch: globalThis.fetch, EventSource: globalThis.EventSource };
   const elements = new Map();
