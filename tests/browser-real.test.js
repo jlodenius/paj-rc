@@ -268,6 +268,21 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
           const rect = button.getBoundingClientRect(); return rect.width >= 44 && rect.height >= 44;
         });
     })()`), true, 'filter controls fit mobile and desktop with usable touch targets');
+    const alignment = await evaluate(`(() => {
+      const textLeft = element => {
+        const range = document.createRange(); range.selectNodeContents(element);
+        return range.getBoundingClientRect().left;
+      };
+      const all = document.querySelector('#filter-all');
+      return { label: textLeft(all), listContent: textLeft(document.querySelector('.session-name-prefix')),
+        slashes: [...document.querySelectorAll('.filter-separator')].map(node => getComputedStyle(node).fontWeight),
+        labels: [...document.querySelectorAll('.session-filter')].map(node => getComputedStyle(node).fontWeight),
+        otherPadding: ['filter-working', 'filter-idle'].map(id => getComputedStyle(document.getElementById(id)).paddingInlineStart) };
+    })()`);
+    assert.equal(alignment.label, alignment.listContent, `All text aligns with list content at ${width}px`);
+    assert.deepEqual(alignment.slashes, ['500', '500']);
+    assert.deepEqual(alignment.labels, ['400', '400', '400']);
+    assert.deepEqual(alignment.otherPadding, ['4px', '4px']);
   }
   await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   const filterScreenshot = process.env.PAJ_RC_FILTER_SCREENSHOT;
