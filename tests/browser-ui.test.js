@@ -26,11 +26,13 @@ class Element {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-test('Captain badges require a fresh connected session list and follow activation, revocation and reconnect', async () => {
+test('Captain sessions sort first stably and badges follow activation, revocation and reconnect', async () => {
   const globals = { document: globalThis.document, fetch: globalThis.fetch, EventSource: globalThis.EventSource };
   const elements = new Map();
   const session = { id: 'captain', name: 'Main', generation: 'generation', state: {}, captain: true };
   const ordinary = { ...session, id: 'ordinary', name: 'Captain by name only', captain: undefined };
+  const listed = [ordinary, session];
+  const titles = () => elements.get('sessions').children.map(card => card.children[0].textContent);
   let source;
   let pendingList;
   let holdList = false;
@@ -49,7 +51,7 @@ test('Captain badges require a fresh connected session list and follow activatio
     if (url === '/api/auth') data = { authenticated: true };
     else if (url === '/api/sessions') {
       if (failList) throw new Error('offline');
-      data = { sessions: structuredClone([session, ordinary]) };
+      data = { sessions: structuredClone(listed) };
       if (holdList) await new Promise(resolve => { pendingList = resolve; });
     } else if (url.endsWith('/snapshot')) data = { generation: 'generation', seq: 0,
       state: {}, messages: [], hasMore: false };
@@ -65,6 +67,7 @@ test('Captain badges require a fresh connected session list and follow activatio
     source.onopen();
     await settle();
     assert.equal(count(), 1, 'initial live list');
+    assert.deepEqual(titles(), ['Main Captain', 'Captain by name only'], 'active Captain precedes earlier ordinary session');
     assert.equal(badges(elements.get('sessions'))[0].textContent, 'Captain');
     elements.get('sessions').children[0].onclick();
     await settle();
@@ -75,7 +78,18 @@ test('Captain badges require a fresh connected session list and follow activatio
       await settle();
       assert.equal(count(), value === true ? 1 : 0);
       assert.equal(badges(elements.get('session-name')).length, value === true ? 1 : 0);
+      assert.equal(titles()[0], value === true ? 'Main Captain' : 'Captain by name only');
     }
+    listed.push({ ...ordinary, id: 'last-ordinary', name: 'Last ordinary' },
+      { ...session, id: 'second-captain', name: 'Second main' });
+    source.listeners.sessions();
+    await settle();
+    assert.deepEqual(titles(), ['Main Captain', 'Second main Captain', 'Captain by name only', 'Last ordinary'],
+      'multiple Captains precede ordinary sessions with stable ordering in both groups');
+    assert.equal(elements.get('session-name').textContent, 'Main Captain', 'sorting preserves selection');
+    listed.splice(2);
+    source.listeners.sessions();
+    await settle();
     holdList = true;
     source.listeners.sessions();
     await settle();

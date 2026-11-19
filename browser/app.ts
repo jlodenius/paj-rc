@@ -463,7 +463,8 @@ function appendCaptainBadge(node: HTMLElement, session: Session | null) {
 
 function renderSessions() {
   projectPaths = [];
-  const nodes = sessions.map(session => {
+  const ordered = [...sessions].sort((left, right) => Number(right.captain === true) - Number(left.captain === true));
+  const nodes = ordered.map(session => {
     const button = document.createElement('button');
     button.className = 'session-card';
     button.setAttribute('aria-current', String(session.id === selected?.id));
