@@ -181,12 +181,23 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
     data.sessions.map(session => [session.name, session.captain]))`), [
     ['Backend', false], ['paj-captain', false], ['Coordinator', true], ['Second coordinator', true],
   ]);
+  const filterPaint = id => evaluate(`(() => {
+    const button = document.getElementById(${JSON.stringify(id)});
+    const style = getComputedStyle(button);
+    return { background: style.backgroundColor, color: style.color, underline: style.textDecorationLine,
+      underlineColor: style.textDecorationColor, highlight: style.webkitTapHighlightColor,
+      outline: style.outlineStyle, outlineWidth: style.outlineWidth, outlineColor: style.outlineColor,
+      focusVisible: button.matches(':focus-visible'), active: button.matches(':active') };
+  })()`);
   await call('Emulation.setTouchEmulationEnabled', { enabled: true });
   const workingTarget = await evaluate(`(() => {
     const rect = document.querySelector('#filter-working').getBoundingClientRect();
     return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
   })()`);
   await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [workingTarget] });
+  const touched = await filterPaint('filter-working');
+  assert.equal(touched.background, 'rgba(0, 0, 0, 0)');
+  assert.equal(touched.highlight, 'rgba(0, 0, 0, 0)');
   await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await until(async () => JSON.stringify(await cardNames()) === JSON.stringify(['Coordinator', 'paj-captain']));
   assert.equal(await evaluate('document.querySelector("#filter-working").getAttribute("aria-pressed")'), 'true');
@@ -196,15 +207,23 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
   await until(() => snapshots > beforeFilterRefresh);
   assert.equal(await evaluate('document.querySelector("#filter-working").getAttribute("aria-pressed")'), 'true');
   assert.deepEqual(await cardNames(), ['Coordinator', 'paj-captain']);
-  for (const [scheme, active] of [['light', 'rgb(189, 48, 46)'], ['dark', 'rgb(239, 83, 80)']]) {
+  for (const [scheme, foreground] of [['light', 'rgb(33, 33, 33)'], ['dark', 'rgb(240, 240, 240)']]) {
     await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
     assert.deepEqual(await evaluate(`(() => {
       const filters = [...document.querySelectorAll('.session-filter')];
-      return { active: getComputedStyle(filters.find(button => button.getAttribute('aria-pressed') === 'true')).color,
-        inactive: filters.filter(button => button.getAttribute('aria-pressed') === 'false')
-          .every(button => getComputedStyle(button).color === getComputedStyle(document.body).color),
+      const active = getComputedStyle(filters.find(button => button.getAttribute('aria-pressed') === 'true'));
+      return { labels: filters.map(button => getComputedStyle(button).color),
+        backgrounds: filters.map(button => getComputedStyle(button).backgroundColor),
+        activeLine: active.textDecorationLine, activeUnderline: active.textDecorationColor,
+        inactiveLines: filters.filter(button => button.getAttribute('aria-pressed') === 'false')
+          .map(button => getComputedStyle(button).textDecorationLine),
         slashes: [...document.querySelectorAll('.filter-separator')].map(node => getComputedStyle(node).color) };
-    })()`), { active, inactive: true, slashes: ['rgb(239, 83, 80)', 'rgb(239, 83, 80)'] });
+    })()`), { labels: [foreground, foreground, foreground], backgrounds: Array(3).fill('rgba(0, 0, 0, 0)'),
+      activeLine: 'underline', activeUnderline: 'rgb(239, 83, 80)', inactiveLines: ['none', 'none'],
+      slashes: ['rgb(239, 83, 80)', 'rgb(239, 83, 80)'] });
+    const tapped = await filterPaint('filter-working');
+    assert.equal(tapped.focusVisible, false);
+    assert.equal(tapped.outline, 'none');
   }
   await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
   for (const width of [320, 390, 1440]) {
@@ -233,14 +252,46 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
   await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
   assert.equal(await evaluate('document.querySelector("#filter-idle").getAttribute("aria-pressed")'), 'true');
   await until(async () => JSON.stringify(await cardNames()) === JSON.stringify(['Second coordinator', 'Backend']));
-  assert.equal(await evaluate('getComputedStyle(document.querySelector("#filter-idle")).outlineStyle'), 'solid');
+  const keyboardFilter = await filterPaint('filter-idle');
+  assert.equal(keyboardFilter.outline, 'solid');
+  assert.equal(keyboardFilter.focusVisible, true);
+  assert.ok(parseFloat(keyboardFilter.outlineWidth) > 0);
+  assert.equal(keyboardFilter.outlineColor, 'rgb(239, 83, 80)');
+  assert.equal(keyboardFilter.background, 'rgba(0, 0, 0, 0)');
+  assert.equal(keyboardFilter.color, 'rgb(33, 33, 33)');
+  assert.equal(keyboardFilter.underlineColor, 'rgb(239, 83, 80)');
   assert.equal(await evaluate('document.querySelector("#session-name").textContent'), 'Backend');
   assert.equal(await evaluate('document.querySelector(".message.paj h2").textContent'), 'Agent review');
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   await evaluate('document.querySelector(".session-card[aria-current=true]").click(); true');
   await until(() => evaluate('document.querySelector(".message.paj h2")'));
   assert.equal(await evaluate('document.querySelector("#workspace").classList.contains("show-conversation")'), true);
-  await evaluate('document.querySelector("#filter-working").click(); true');
+  await call('Emulation.setTouchEmulationEnabled', { enabled: false });
+  const desktopTarget = await evaluate(`(() => {
+    const rect = document.querySelector('#filter-working').getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  })()`);
+  await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...desktopTarget });
+  assert.equal((await filterPaint('filter-working')).background, 'rgba(0, 0, 0, 0)');
+  await call('Input.dispatchMouseEvent', { type: 'mousePressed', ...desktopTarget, button: 'left', clickCount: 1 });
+  const pressedFilter = await filterPaint('filter-working');
+  assert.equal(pressedFilter.active, true);
+  assert.equal(pressedFilter.background, 'rgba(0, 0, 0, 0)');
+  await call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...desktopTarget, button: 'left', clickCount: 1 });
+  const clickedFilter = await filterPaint('filter-working');
+  assert.equal(clickedFilter.focusVisible, false);
+  assert.equal(clickedFilter.outline, 'none');
+  assert.equal(clickedFilter.background, 'rgba(0, 0, 0, 0)');
+  assert.equal(clickedFilter.color, 'rgb(33, 33, 33)');
+  assert.equal(clickedFilter.underlineColor, 'rgb(239, 83, 80)');
+  const refreshHover = await evaluate(`(() => {
+    const rect = document.querySelector('#refresh').getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  })()`);
+  await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...refreshHover });
+  await until(() => evaluate('document.querySelector("#refresh").matches(":hover") && getComputedStyle(document.querySelector("#refresh")).backgroundColor === "rgb(243, 237, 237)"'));
+  assert.equal(await evaluate('getComputedStyle(document.querySelector("#refresh")).color'), 'rgb(239, 83, 80)');
+  assert.equal((await filterPaint('filter-working')).background, 'rgba(0, 0, 0, 0)');
   activity.get(coordinator.id)(false);
   await until(async () => JSON.stringify(await cardNames()) === JSON.stringify(['paj-captain']));
   assert.equal(await evaluate('document.querySelector("#filter-working").getAttribute("aria-pressed")'), 'true');

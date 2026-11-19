@@ -122,9 +122,9 @@ h6::before { content: '###### '; }
 .section-heading h1 { font-size: 14px; }
 .section-heading button { padding-inline: 9px; font-size: 11px; }
 .session-filters { display: flex; align-items: center; min-width: 0; white-space: nowrap; }
-.session-filters .session-filter { min-width: 44px; padding-inline: 4px; border: 0; background: transparent; color: var(--text); font-size: 12px; }
-.session-filters .session-filter:hover:not(:disabled) { background: var(--selected); }
-.session-filters .session-filter[aria-pressed="true"] { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 4px; }
+.session-filters .session-filter { min-width: 44px; padding-inline: 4px; border: 0; appearance: none; background: transparent; color: var(--text); font-size: 12px; -webkit-tap-highlight-color: transparent; }
+.session-filters .session-filter:focus:not(:focus-visible) { outline: none; }
+.session-filters .session-filter[aria-pressed="true"] { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 4px; }
 .filter-separator { color: var(--accent); font-size: 12px; }
 #refresh, #refresh:hover:not(:disabled) { color: var(--accent); }
 #sessions { min-height: 0; padding: 0 12px; overflow-y: auto; scrollbar-width: thin; }
