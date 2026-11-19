@@ -20,6 +20,7 @@ export function createSubmissionFeedback(limit = 128) {
   const key = (scope: string, id: string) => `${scope}:${id}`;
   return {
     clear() { entries.clear(); observed.clear(); },
+    forget(scope: string, requestId: string) { entries.delete(key(scope, requestId)); },
     begin(scope: string, { requestId, text, imageCount = 0, seq }: {
       requestId: string; text: string; imageCount?: number; seq: number;
     }) {

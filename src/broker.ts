@@ -2,6 +2,7 @@ import { createServer, createConnection } from 'node:net';
 import { mkdir, chmod, lstat, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { readFrames, writeFrame, isMain } from './protocol.js';
+import { MAX_COMMAND_NAME_LENGTH, COMMAND_PAGE_SIZE, COMMAND_PAGE_BYTE_LIMIT } from '../browser/commands.js';
 
 import type { Socket } from 'node:net';
 import type { Paths } from './config.js';
@@ -35,6 +36,8 @@ interface Frame {
 interface Pending {
   timer: ReturnType<typeof setTimeout>;
   method: string;
+  offset?: number;
+  commandsRevision?: string;
   resolve: (result: Result) => void;
   reject: (error: Error) => void;
 }
@@ -109,12 +112,12 @@ function state(value: SessionState) {
 }
 
 function commandMetadata(value: Command[]) {
-  if (!Array.isArray(value) || value.length > 128) throw new Error('Invalid session commands');
+  if (!Array.isArray(value) || value.length > COMMAND_PAGE_SIZE || Buffer.byteLength(JSON.stringify(value)) > COMMAND_PAGE_BYTE_LIMIT) throw new Error('Invalid session commands');
   const seen = new Set();
   return value.map(entry => {
-    if (!entry || typeof entry.name !== 'string' || !entry.name || entry.name.length > 100 ||
+    if (!entry || typeof entry.name !== 'string' || !entry.name || entry.name.length > MAX_COMMAND_NAME_LENGTH ||
         entry.name.startsWith('/') || /[\s\u0000-\u001f\u007f-\u009f]/u.test(entry.name) ||
-        !['skill', 'prompt'].includes(entry.source) ||
+        !['extension', 'skill', 'prompt'].includes(entry.source) ||
         (entry.source === 'skill' && (!entry.name.startsWith('skill:') || entry.name.length === 6)) ||
         typeof entry.description !== 'string' || entry.description.length > 240 ||
         /[\u0000-\u001f\u007f-\u009f]/u.test(entry.description) || seen.has(entry.name)) {
@@ -123,6 +126,19 @@ function commandMetadata(value: Command[]) {
     seen.add(entry.name);
     return { name: entry.name, description: entry.description, source: entry.source };
   });
+}
+
+function commandPageMetadata(value: Result, offset = 0, required = false) {
+  const commands = value?.commands === undefined ? undefined : commandMetadata(value.commands);
+  if (!required && value?.commandsNext === undefined && value?.commandsRevision === undefined) {
+    return commands === undefined ? {} : { commands };
+  }
+  if (!commands || typeof value.commandsRevision !== 'string' || !/^[a-f0-9]{64}$/.test(value.commandsRevision) ||
+      !(value.commandsNext === null || (commands.length > 0 && Number.isSafeInteger(value.commandsNext) &&
+        value.commandsNext === offset + commands.length))) {
+    throw new Error('Invalid command page');
+  }
+  return { commands, commandsNext: value.commandsNext as number | null, commandsRevision: value.commandsRevision };
 }
 
 async function removeStale(path: string) {
@@ -236,8 +252,12 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
         let result = frame.result;
         if (frame.ok === true && pending.method === 'snapshot') {
           result = { ...result, state: state(result?.state),
-            ...(result?.commands === undefined ? {} : { commands: commandMetadata(result.commands) }) };
+            ...commandPageMetadata(result) };
           endpoint.state = result.state;
+        }
+        if (frame.ok === true && pending.method === 'commands') {
+          if (result?.commandsRevision !== pending.commandsRevision) throw new Error('Command catalog changed');
+          result = { generation: endpoint.generation, ...commandPageMetadata(result, pending.offset, true) };
         }
         endpoint.pending.delete(frame.id);
         clearTimeout(pending.timer);
@@ -331,7 +351,8 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
           reject(new RemoteError('timeout', method === 'snapshot' ? 'Session did not respond' :
             'Write outcome is unknown; check the conversation before retrying', 504));
         }, requestTimeoutMs);
-        endpoint.pending.set(requestId, { resolve, reject, timer, method });
+        endpoint.pending.set(requestId, { resolve, reject, timer, method,
+          ...(method === 'commands' ? { offset: params.offset as number, commandsRevision: params.commandsRevision as string } : {}) });
         try {
           writeFrame(endpoint.socket, { type: 'request', id: requestId, method,
             params: { ...params, generation: endpoint.generation } });

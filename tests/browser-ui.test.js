@@ -22,6 +22,7 @@ class Element {
   setAttribute() {}
   removeAttribute() {}
   focus() {}
+  setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
@@ -105,6 +106,98 @@ test('Captain badges require a fresh connected session list and follow activatio
     source.listeners.sessions();
     await settle();
     assert.equal(count(), 0, 'failed list refresh hides unverified capability');
+  } finally { Object.assign(globalThis, globals); }
+});
+
+test('remote commands load every catalog page, execute extensions immediately and ignore stale pages', async () => {
+  const globals = { document: globalThis.document, fetch: globalThis.fetch, EventSource: globalThis.EventSource };
+  const elements = new Map();
+  const sessions = [
+    { id: 'main', generation: 'main-gen', name: 'Main', state: { busy: true, runId: 'run' } },
+    { id: 'other', generation: 'other-gen', name: 'Other', state: {} },
+  ];
+  const revision = 'a'.repeat(64);
+  const commands = Array.from({ length: 128 }, (_, i) => ({ name: `skill:s${i}`, source: 'skill' }));
+  let source;
+  let resolvePage;
+  let submissions = 0;
+  globalThis.document = {
+    getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
+    createElement() { return new Element(); },
+  };
+  globalThis.EventSource = class {
+    constructor() { source = this; this.listeners = {}; }
+    addEventListener(type, callback) { this.listeners[type] = callback; }
+    close() {}
+  };
+  globalThis.fetch = async (url, options) => {
+    let data;
+    if (url === '/api/auth') data = { authenticated: true };
+    else if (url === '/api/sessions') data = { sessions };
+    else if (url === '/api/sessions/main/snapshot') data = { generation: 'main-gen', seq: 0,
+      state: sessions[0].state, messages: [], hasMore: false, commands, commandsNext: 128, commandsRevision: revision };
+    else if (url === '/api/sessions/other/snapshot') data = { generation: 'other-gen', seq: 0,
+      state: {}, messages: [], hasMore: false, commands: [{ name: 'other-only', source: 'prompt' }] };
+    else if (url.startsWith('/api/sessions/main/commands?')) {
+      assert.match(url, /generation=main-gen/);
+      const offset = new URL(url, 'http://fixture').searchParams.get('offset');
+      assert.ok(['128', '129'].includes(offset));
+      data = offset === '128' ? await new Promise(resolve => { resolvePage = resolve; }) : {
+        generation: 'main-gen', commands: [{ name: 'last-prompt', source: 'prompt' }],
+        commandsNext: null, commandsRevision: revision,
+      };
+    } else if (url === '/api/sessions/main/prompt') {
+      assert.equal(JSON.parse(options.body).text, '/captain ');
+      submissions++;
+      data = { status: 'submitted', command: 'captain' };
+    } else throw new Error(`Unexpected URL: ${url}`);
+    return { ok: true, json: async () => structuredClone(data) };
+  };
+  const showMenu = text => {
+    const input = elements.get('prompt');
+    input.value = text;
+    input.selectionStart = input.selectionEnd = text.length;
+    globalThis.document.activeElement = input;
+    input.oninput();
+    return elements.get('command-completions');
+  };
+  const page = { generation: 'main-gen', commands: [{ name: 'captain', source: 'extension', description: 'Enable Captain' }],
+    commandsNext: 129, commandsRevision: revision };
+  try {
+    await import(`../dist/public/app.js?commands=${Date.now()}`);
+    await settle();
+    source.onopen();
+    await settle();
+    elements.get('sessions').children[0].onclick();
+    await settle();
+    assert.equal(typeof resolvePage, 'function', 'fetches pages beyond the first 128 loaded resources');
+    showMenu('/captain ');
+    elements.get('deliver-as').value = 'steer';
+    await elements.get('composer').onsubmit({ preventDefault() {} });
+    assert.equal(elements.get('messages').children.length, 0, 'server-recognized command cannot retain a steering receipt before discovery finishes');
+    resolvePage(page);
+    await settle();
+    const menu = showMenu('/capt');
+    assert.equal(menu.children.length, 1);
+    assert.equal(menu.children[0].children[1].textContent, 'extension');
+    menu.children[0].onclick();
+    assert.equal(elements.get('prompt').value, '/captain ');
+    assert.match(elements.get('composer-hint').textContent, /immediately/);
+    elements.get('deliver-as').value = 'followUp';
+    await elements.get('composer').onsubmit({ preventDefault() {} });
+    assert.equal(submissions, 2);
+    assert.match(elements.get('notice').textContent, /submitted.*immediately/);
+    assert.equal(elements.get('messages').children.length, 0, 'command is not a queued steering receipt');
+    elements.get('refresh').onclick();
+    await settle();
+    const oldPage = resolvePage;
+    elements.get('sessions').children[1].onclick();
+    await settle();
+    oldPage(page);
+    await settle();
+    const otherMenu = showMenu('/');
+    assert.equal(otherMenu.children.length, 1);
+    assert.equal(otherMenu.children[0].children[0].textContent, '/other-only');
   } finally { Object.assign(globalThis, globals); }
 });
 

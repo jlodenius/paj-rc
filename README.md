@@ -40,8 +40,17 @@ paj-rc key
 Open <http://127.0.0.1:43187> and enter the key. Treat it like a password: paired browsers can control
 Pi and its tools. The service is not enabled at login. Use `paj-rc --help` for settings and revocation.
 
-Select a session and type `/` for skills and prompt templates. Insert a suggestion, add arguments,
+Select a session and type `/` for loaded extension commands, skills, and prompt templates. The list
+loads in bounded pages rather than stopping after 128 entries. Insert a suggestion, add arguments,
 then send. Steering and follow-ups require an explicit choice; uncertain writes are never retried.
+
+Extension commands execute immediately, not as steering or follow-ups, and accept text arguments only.
+“Submitted” acknowledges dispatch, not completion or success. Dialogs, notifications, and command errors
+remain in Pi's terminal; the browser shows when terminal interaction is required. Arbitrary custom
+terminal screens and built-in interactive commands such as `/model` are not browser interfaces.
+Command names must contain no whitespace or control characters and fit the 16,000-character input
+limit. Unsupported catalog entries do not hide other commands; invoking one is rejected, not sent to
+the model as ordinary text.
 
 A **Captain** badge marks sessions with Paj's live Captain capability. It follows the existing registry
 poll (normally every five seconds), not names or historic mode entries. Missing, malformed, or stale

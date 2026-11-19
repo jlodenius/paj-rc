@@ -4,9 +4,9 @@ import { prepareImage } from './images.js';
 import { MAX_IMAGES } from './image-limits.js';
 import { compactProjectPath } from './paths.js';
 import { sessionInfo } from './session-info.js';
-import { commandSuggestions, insertCommand } from './commands.js';
+import { commandSuggestions, insertCommand, COMMAND_PAGE_SIZE } from './commands.js';
 import { createSubmissionFeedback, steeringLabel } from './submissions.js';
-import type { Command, Session, SessionState, Envelope, Transcript } from './types.js';
+import type { Command, CommandPage, Session, SessionState, Envelope, Transcript } from './types.js';
 
 interface Elements {
   prompt: HTMLTextAreaElement;
@@ -63,6 +63,7 @@ let buffer: Envelope[] = [];
 let sending = false;
 let stopping = false;
 let listVersion = 0;
+let commandListVersion = 0;
 let authenticated = false;
 let imageUploads = false;
 let photos: Photo[] = [];
@@ -130,7 +131,7 @@ function renderCommandMenu() {
     name.textContent = `/${command.name}`;
     const kind = document.createElement('span');
     kind.className = 'command-kind';
-    kind.textContent = command.source === 'skill' ? 'skill' : 'prompt';
+    kind.textContent = command.source;
     const description = document.createElement('span');
     description.className = 'command-description';
     description.textContent = command.description || '';
@@ -376,6 +377,7 @@ function start() {
     connected = false;
     captainSynced = false;
     listVersion++;
+    commandListVersion++;
     renderSessions();
     renderHeader();
     synced = false;
@@ -520,6 +522,7 @@ function statusText(state: SessionState = {}) {
 function selectSession(session: Session | null, { reveal = true } = {}) {
   if (selected?.id !== session?.id || selected?.generation !== session?.generation) clearPhotos();
   selectionVersion++;
+  commandListVersion++;
   selected = session;
   transcript = createTranscript();
   snapshotting = false;
@@ -538,6 +541,7 @@ async function refreshSnapshot() {
   if (snapshotting) { resnapshotNeeded = true; return; }
   const version = selectionVersion;
   const id = selected.id;
+  const commandsVersion = ++commandListVersion;
   snapshotting = true;
   synced = false;
   buffer = [];
@@ -547,6 +551,7 @@ async function refreshSnapshot() {
     if (version !== selectionVersion || !authenticated) return;
     transcript = applySnapshot(snapshot);
     synced = true;
+    void refreshCommandPages(snapshot, id, version, commandsVersion);
     for (const envelope of buffer) {
       if (applyEvent(transcript, envelope) === 'resync') {
         resnapshotNeeded = true;
@@ -567,6 +572,34 @@ async function refreshSnapshot() {
         refreshSnapshot();
       }
     }
+  }
+}
+
+async function refreshCommandPages(snapshot: Transcript, id: string, version: number, commandsVersion: number) {
+  if (snapshot.commandsNext == null) return;
+  const current = () => authenticated && connected && version === selectionVersion &&
+    commandsVersion === commandListVersion && transcript.generation === snapshot.generation;
+  const commands = [...snapshot.commands];
+  let offset = snapshot.commandsNext;
+  try {
+    while (offset !== null && current()) {
+      const page = await api<CommandPage>(`/api/sessions/${encodeURIComponent(id)}/commands?offset=${offset}&generation=${encodeURIComponent(snapshot.generation)}&revision=${encodeURIComponent(snapshot.commandsRevision)}`);
+      if (!current()) return;
+      if (page.generation !== snapshot.generation || page.commandsRevision !== snapshot.commandsRevision ||
+          !Array.isArray(page.commands) || page.commands.length > COMMAND_PAGE_SIZE ||
+          !(page.commandsNext === null || (page.commands.length > 0 && Number.isSafeInteger(page.commandsNext) &&
+            page.commandsNext === offset + page.commands.length))) {
+        throw new Error('Loaded command catalog changed');
+      }
+      commands.push(...page.commands);
+      offset = page.commandsNext;
+    }
+    if (current()) {
+      transcript.commands = commands;
+      renderControls();
+    }
+  } catch {
+    if (current()) notice('Could not load every command. Use Refresh to update the command list.');
   }
 }
 
@@ -636,7 +669,13 @@ function renderTranscript() {
   if (nearBottom) viewport.scrollTop = viewport.scrollHeight;
 }
 
+function extensionCommand() {
+  const name = $('prompt').value.startsWith('/') ? $('prompt').value.slice(1).split(' ', 1)[0] : null;
+  return transcript.commands.find(command => command.source === 'extension' && command.name === name);
+}
+
 function renderControls() {
+  const command = extensionCommand();
   const ready = authenticated && connected && selected && synced && transcript.generation && !snapshotting;
   const blocked = transcript.state.editorBusy || transcript.state.terminalRequired;
   const pending = awaitingConfirmation(transcript.state);
@@ -646,7 +685,7 @@ function renderControls() {
   $('prompt').disabled = !authenticated || !selected;
   $('send').disabled = !ready || blocked || pending || sending || preparingPhotos ||
     (!$('prompt').value.trim() && photos.length === 0) ||
-    (photos.length > 0 && (!imageUploads || transcript.state.supportsImages !== true));
+    (photos.length > 0 && (Boolean(command) || !imageUploads || transcript.state.supportsImages !== true));
   $('send').textContent = sending ? 'Submitting…' : 'Send ↑';
   $('stop').disabled = !ready || stopping || !transcript.state.busy || !transcript.state.runId || transcript.state.editorBusy;
   $('composer-hint').textContent = transcript.state.terminalRequired
@@ -654,7 +693,9 @@ function renderControls() {
     : transcript.state.editorBusy ? 'An editor request owns this session. Send is unavailable.'
       : snapshotting ? 'Synchronizing conversation…'
         : pending ? 'Awaiting Pi confirmation. Sending is paused; check the terminal. If dispatch remains uncertain, restart that Pi process before retrying.'
-          : '';
+          : command ? photos.length ? 'Remove photos before invoking an extension command.'
+            : 'Extension commands execute immediately, not as steering or follow-ups. Terminal UI stays in Pi.'
+            : '';
   $('composer-hint').hidden = !$('composer-hint').textContent;
   renderCommandMenu();
   renderPhotoControls();
@@ -708,24 +749,25 @@ $('composer').onsubmit = async event => {
   const requestId = crypto.randomUUID();
   const deliverAs = $('deliver-as').value;
   const scope = feedbackScope(id, generation);
-  const steering = deliverAs === 'steer' && transcript.state.busy && Boolean(transcript.state.runId);
+  const steering = !extensionCommand() && deliverAs === 'steer' && transcript.state.busy && Boolean(transcript.state.runId);
   if (steering) submissionFeedback.begin(scope, { requestId, text, imageCount: images.length, seq: transcript.seq });
   sending = true;
   renderTranscript();
   try {
     const action = images.length ? 'image-prompt' : 'prompt';
-    await api(`/api/sessions/${encodeURIComponent(id)}/${action}`, {
+    const result = await api<{ command?: string }>(`/api/sessions/${encodeURIComponent(id)}/${action}`, {
       generation,
       requestId,
       text,
       ...(images.length ? { images } : {}),
       deliverAs,
     });
-    if (steering) submissionFeedback.update(scope, requestId, 'submitted');
+    if (result.command) submissionFeedback.forget(scope, requestId);
+    else if (steering) submissionFeedback.update(scope, requestId, 'submitted');
     if (version === selectionVersion) {
       if ($('prompt').value === text) $('prompt').value = '';
       if (revision === photoRevision) clearPhotos();
-      notice();
+      notice(result.command ? `Extension command /${result.command} submitted; executes immediately. Dialogs, notifications and errors remain in Pi's terminal.` : '');
     }
   } catch (error) {
     if (steering) submissionFeedback.update(scope, requestId, error instanceof ApiError && error.status < 500 ? 'rejected' : 'unknown');

@@ -19,7 +19,7 @@ async function until(predicate, timeout = 2000) {
   throw new Error('Condition timed out');
 }
 
-function liveSession(name) {
+function liveSession(name, commands) {
   const identity = { id: randomUUID(), piSessionId: randomUUID(), pid: process.pid,
     name, projectRoot: `/projects/${name}`, role: 'primary', parentPiSessionId: null };
   const handlers = new Map();
@@ -36,7 +36,8 @@ function liveSession(name) {
     listeners.add(callback);
     handlers.set(event, listeners);
     return () => listeners.delete(callback);
-  }, sendUserMessage(text, options) { submitted.push({ text, options }); } };
+  }, sendUserMessage(text, options) { submitted.push({ text, options }); },
+    ...(commands ? { getCommands: () => commands } : {}) };
   const paj = { version: 1, getSnapshot: () => ({ identity, editorBusy: false }),
     tryReserve: token => {
       if (reservations.has(token)) return true;
@@ -59,7 +60,12 @@ test('two live adapters expose separate chats, keep work alive on browser loss, 
   const paths = { runtimeDir, socketPath: join(runtimeDir, 'rc.sock') };
   const config = { port: 0, allowedOrigins: [], idleTimeoutMs: 10000,
     pairingKey: randomBytes(32).toString('base64url') };
-  const first = liveSession('backend');
+  const commands = [
+    ...Array.from({ length: 12 }, (_, i) => ({ name: `${'🙂'.repeat(3000)}${i}`, source: 'extension' })),
+    ...Array.from({ length: 300 }, (_, i) => ({ name: `command${i}`,
+      description: `Loaded command ${i}`, source: i % 2 ? 'prompt' : 'extension', sourceInfo: { path: 'SECRET' } })),
+  ];
+  const first = liveSession('backend', commands);
   const second = liveSession('website');
   const listSessions = async () => [first.identity, second.identity];
   let daemon = await startDaemon(config, { paths, listSessions });
@@ -86,6 +92,28 @@ test('two live adapters expose separate chats, keep work alive on browser loss, 
   const route = `/api/sessions/${first.identity.id}`;
   const snapshot = await (await fetch(`${daemon.address}${route}/snapshot`, { headers })).json();
   assert.equal(snapshot.messages[0].text, 'Existing terminal prompt');
+  assert.ok(snapshot.commands.length < 128, 'large names respect the byte budget before reaching the count limit');
+  assert.equal(snapshot.commandsNext, snapshot.commands.length);
+  assert.equal(snapshot.commands[0].source, 'extension');
+  const commandUrl = offset => `${daemon.address}${route}/commands?offset=${offset}&generation=${snapshot.generation}&revision=${snapshot.commandsRevision}`;
+  const discovered = [...snapshot.commands];
+  let offset = snapshot.commandsNext;
+  while (offset !== null) {
+    const response = await fetch(commandUrl(offset), { headers });
+    assert.equal(response.status, 200);
+    const page = await response.json();
+    assert.ok(page.commands.length <= 128);
+    assert.ok(Buffer.byteLength(JSON.stringify(page.commands)) <= 128 * 1024);
+    if (page.commandsNext !== null) assert.equal(page.commandsNext, offset + page.commands.length);
+    discovered.push(...page.commands);
+    offset = page.commandsNext;
+  }
+  assert.equal(discovered.length, 312);
+  assert.equal(discovered.at(-1).name, 'command299');
+  assert.doesNotMatch(JSON.stringify([snapshot, discovered]), /SECRET/);
+  assert.equal((await fetch(commandUrl(-1), { headers })).status, 400);
+  commands.push({ name: 'changed', source: 'extension' });
+  assert.equal((await fetch(commandUrl(128), { headers })).status, 409);
   const input = { generation: snapshot.generation, requestId: randomUUID(), text: 'Investigate backend', deliverAs: 'reject' };
   for (let i = 0; i < 2; i++) {
     const response = await fetch(`${daemon.address}${route}/prompt`, { method: 'POST', headers, body: JSON.stringify(input) });

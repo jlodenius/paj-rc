@@ -32,10 +32,12 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
     model: { id: 'gpt-6.1-sol', provider: 'openai-codex', name: 'GPT 6.1 Sol' },
     context: { tokens: 200000, contextWindow: 500000 } };
   const submissions = [];
+  const extensionSubmissions = [];
   const nativeSteers = [];
   const commands = [
     { name: 'review', description: 'Review changes', source: 'prompt' },
     { name: 'skill:research', description: '<img src=x onerror=alert(1)> Research a topic', source: 'skill' },
+    { name: 'captain', description: 'Enable Captain', source: 'extension' },
   ];
   const listeners = new Set();
   let seq = 0;
@@ -55,7 +57,14 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
           text: '## Agent review\n\n**All checks passed.**\n\n- Updated `src/app.js`\n- Preserved your changes\n\n```js\nconst safe = true;\n```\n\n<img src=x onerror=alert(1)>\n\n[Unsafe](javascript:alert(1))' },
         ...nativeSteers,
       ], hasMore: false, before: null }; },
-    prompt(params) { submissions.push(params); return { status: 'submitted', requestId: params.requestId }; } };
+    prompt(params) {
+      if (params.text === '/captain ') {
+        extensionSubmissions.push(params);
+        return { status: 'submitted', requestId: params.requestId, command: 'captain' };
+      }
+      submissions.push(params);
+      return { status: 'submitted', requestId: params.requestId };
+    } };
   let daemon = await startDaemon(config, { paths, listSessions: async () => [identity] });
   const connector = createConnector({ adapter, socketPath: paths.socketPath, ensureService: async () => true });
   connector.start();
@@ -136,7 +145,7 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
     const input = document.querySelector('#prompt'); input.focus(); input.value = '/';
     input.setSelectionRange(1, 1); input.dispatchEvent(new Event('input'));
   })()`);
-  assert.equal(await evaluate('document.querySelectorAll(".command-option").length'), 2);
+  assert.equal(await evaluate('document.querySelectorAll(".command-option").length'), 3);
   assert.equal(await evaluate('document.querySelectorAll("#command-completions img").length'), 0);
   assert.equal(await evaluate('document.querySelector("#command-completions").textContent.includes("<img src=x")'), true);
   await evaluate('window.menuOption = document.querySelector(".command-option"); true');
@@ -170,6 +179,21 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   await until(() => evaluate('document.querySelector("#prompt").value === \'/skill:research "API safety"\''));
   assert.equal(await evaluate('document.activeElement === document.querySelector("#prompt")'), true);
   assert.equal(await evaluate('document.querySelector("#prompt").selectionStart'), 16);
+  assert.equal(submissions.length, 0);
+  await evaluate(`(() => {
+    const input = document.querySelector('#prompt'); input.value = '/capt'; input.setSelectionRange(5, 5);
+    input.dispatchEvent(new Event('input'));
+  })()`);
+  assert.equal(await evaluate('document.querySelector(".command-kind").textContent'), 'extension');
+  assert.match(await evaluate('document.querySelector("#command-completions").getAttribute("aria-label")'), /Extension commands/);
+  await evaluate('document.querySelector(".command-option").click(); true');
+  assert.equal(await evaluate('document.querySelector("#prompt").value'), '/captain ');
+  assert.match(await evaluate('document.querySelector("#composer-hint").textContent'), /execute immediately/);
+  await evaluate('document.querySelector("#composer").requestSubmit(); true');
+  await until(() => extensionSubmissions.length === 1);
+  await until(() => evaluate('document.querySelector("#prompt").value === ""'));
+  assert.match(await evaluate('document.querySelector("#notice").textContent'), /submitted; executes immediately/);
+  assert.equal(await evaluate('document.querySelectorAll(".message.steering").length'), 0);
   assert.equal(submissions.length, 0);
   await evaluate('document.querySelector("#prompt").value = ""; document.querySelector("#prompt").dispatchEvent(new Event("input")); true');
   assert.equal(await evaluate('document.querySelector("#messages").textContent.includes("<img src=x")'), true);

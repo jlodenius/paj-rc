@@ -513,7 +513,7 @@ test('completion and reset events use current contexts and defer usage until per
   old.adapter.close();
 });
 
-test('snapshots advertise only bounded native skill/prompt commands with native collision precedence', () => {
+test('snapshots advertise bounded native commands with extension collision precedence', () => {
   const catalog = [
     { name: 'blocked', source: 'extension' },
     { name: 'blocked', source: 'prompt', description: 'Shadowed prompt' },
@@ -528,14 +528,75 @@ test('snapshots advertise only bounded native skill/prompt commands with native 
   const h = harness({ getCommands: () => catalog });
   const commands = h.adapter.snapshot(h.params()).commands;
   assert.equal(commands.length, 128);
-  assert.deepEqual(commands[0], { name: 'review', source: 'prompt', description: 'Review changes' });
-  assert.equal(commands[1].name, 'skill:check');
-  assert.equal(commands[1].description.length, 240);
-  assert.doesNotMatch(JSON.stringify(commands), /SECRET|blocked|Duplicate/);
+  assert.deepEqual(commands[0], { name: 'blocked', source: 'extension', description: '' });
+  assert.equal(commands[1].name, 'skill:blocked');
+  assert.deepEqual(commands[2], { name: 'review', source: 'prompt', description: 'Review changes' });
+  assert.equal(commands[3].name, 'skill:check');
+  assert.equal(commands[3].description.length, 240);
+  assert.doesNotMatch(JSON.stringify(commands), /SECRET|Shadowed|Duplicate/);
   h.adapter.close();
   const old = harness();
   assert.equal(Object.hasOwn(old.adapter.snapshot(old.params()), 'commands'), false);
   old.adapter.close();
+});
+
+test('all loaded commands are discoverable in bounded revision-scoped pages', () => {
+  const catalog = Array.from({ length: 320 }, (_, i) => ({
+    name: i % 3 === 2 ? `skill:s${i}` : `c${i}`, source: ['extension', 'prompt', 'skill'][i % 3],
+    description: `Command ${i}`, sourceInfo: { path: 'SECRET' },
+  }));
+  const h = harness({ getCommands: () => catalog });
+  const snapshot = h.adapter.snapshot(h.params());
+  assert.equal(snapshot.commands.length, 128);
+  assert.equal(snapshot.commandsNext, 128);
+  assert.match(snapshot.commandsRevision, /^[a-f0-9]{64}$/);
+  const commands = [...snapshot.commands];
+  let offset = snapshot.commandsNext;
+  while (offset !== null) {
+    const page = h.adapter.commands(h.params({ offset, commandsRevision: snapshot.commandsRevision }));
+    assert.ok(page.commands.length <= 128);
+    commands.push(...page.commands);
+    offset = page.commandsNext;
+  }
+  assert.equal(commands.length, 320);
+  assert.deepEqual(commands.at(-1), { name: 'c319', source: 'prompt', description: 'Command 319' });
+  assert.doesNotMatch(JSON.stringify(commands), /SECRET/);
+  for (const offset of [-1, 1.5, '128', Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => h.adapter.commands(h.params({ offset, commandsRevision: snapshot.commandsRevision })), { code: 'invalid_request' });
+  }
+  catalog.push({ name: 'new-command', source: 'extension' });
+  assert.throws(() => h.adapter.commands(h.params({ offset: 128, commandsRevision: snapshot.commandsRevision })), { code: 'stale_commands' });
+  h.adapter.close();
+});
+
+test('large command names use byte-bounded pages and malformed entries cannot hide valid siblings or become model input', () => {
+  const catalog = [
+    ...Array.from({ length: 24 }, (_, i) => ({ name: `${'🙂'.repeat(3000)}${i}`, source: 'extension' })),
+    { name: 'bad', source: 'extension', description: {} },
+    { name: 'x'.repeat(16000), source: 'extension' },
+    { name: 'captain', source: 'extension' }, { name: 'review', source: 'prompt' },
+    { name: 'skill:check', source: 'skill' },
+  ];
+  const h = harness({ getCommands: () => catalog });
+  const first = h.adapter.snapshot(h.params());
+  assert.ok(first.commands.length < 128);
+  assert.equal(first.commandsNext, first.commands.length);
+  const commands = [...first.commands];
+  let offset = first.commandsNext;
+  while (offset !== null) {
+    const page = h.adapter.commands(h.params({ offset, commandsRevision: first.commandsRevision }));
+    assert.ok(Buffer.byteLength(JSON.stringify(page.commands)) <= 128 * 1024);
+    commands.push(...page.commands);
+    offset = page.commandsNext;
+  }
+  assert.equal(commands.length, 27);
+  assert.deepEqual(commands.slice(-3).map(command => command.name), ['captain', 'review', 'skill:check']);
+  assert.throws(() => h.prompt({ text: '/bad' }), { code: 'unsupported_command' });
+  assert.throws(() => h.prompt({ text: `/${'x'.repeat(16000)}` }), { code: 'invalid_request' });
+  assert.equal(h.calls.length, 0);
+  h.prompt({ text: '/captain' });
+  assert.equal(h.calls[0].args.expandPromptTemplates, true);
+  h.adapter.close();
 });
 
 test('only approved live commands opt into native expansion across delivery modes and photos', () => {
@@ -549,8 +610,13 @@ test('only approved live commands opt into native expansion across delivery mode
           { name: 'skill:check', source: 'skill' },
         ] });
         if (deliverAs !== 'reject') { h.idle(false); h.event('agent_start'); }
-        h.prompt({ text, deliverAs, ...(images ? { images } : {}) });
-        assert.equal(h.calls[0].args.expandPromptTemplates, text.startsWith('/review ') || text.startsWith('/skill:check '), `${deliverAs}: ${text}`);
+        if (images && ['/danger', '/blocked'].includes(text)) {
+          assert.throws(() => h.prompt({ text, deliverAs, images }), { code: 'command_images' });
+          assert.equal(h.calls.length, 0);
+        } else {
+          h.prompt({ text, deliverAs, ...(images ? { images } : {}) });
+          assert.equal(h.calls[0].args.expandPromptTemplates, text !== '/unknown' && text !== 'ordinary', `${deliverAs}: ${text}`);
+        }
         h.adapter.close();
       }
     }
@@ -561,7 +627,7 @@ test('explicit commands beyond the discovery cap still expand without relaxing n
   const catalog = [{ name: 'blocked', source: 'extension' },
     ...Array.from({ length: 130 }, (_, i) => ({ name: `p${i}`, source: 'prompt' })),
     { name: 'skill:late', source: 'skill' }, { name: 'blocked', source: 'prompt' }];
-  for (const [text, expand] of [['/p129 argument', true], ['/skill:late argument', true], ['/blocked', false],
+  for (const [text, expand] of [['/p129 argument', true], ['/skill:late argument', true], ['/blocked', true],
     ['/p129\targument', true], ['/p129\nargument', true], ['/skill:late\targument', false],
     ['/skill:late\nargument', false], ['/blocked\targument', false]]) {
     const h = harness({ getCommands: () => catalog });
@@ -573,11 +639,29 @@ test('explicit commands beyond the discovery cap still expand without relaxing n
   }
 });
 
+test('extension commands execute immediately in every delivery mode without retaining agent submission leases', () => {
+  for (const deliverAs of ['reject', 'steer', 'followUp']) {
+    for (const busy of [false, true]) {
+      const h = harness({ getCommands: () => [{ name: 'captain', source: 'extension' }] });
+      if (busy) { h.idle(false); h.event('agent_start'); }
+      const result = h.prompt({ text: '/captain off', deliverAs });
+      assert.deepEqual(result, { status: 'submitted', requestId: 'request', command: 'captain' });
+      assert.deepEqual(h.calls, [{ text: '/captain off', args: { expandPromptTemplates: true } }]);
+      assert.equal(h.reservations.size, 0);
+      assert.equal(h.adapter.state().busy, busy);
+      assert.equal(h.prompt({ text: '/captain off', deliverAs }).duplicate, true);
+      assert.equal(h.calls.length, 1);
+      h.event('ui_prompt_start');
+      assert.throws(() => h.prompt({ requestId: 'another', text: '/captain off', deliverAs }), { code: 'terminal_required' });
+      h.adapter.close();
+    }
+  }
+});
+
 test('missing, throwing and malformed native command catalogs cannot enable command dispatch', () => {
   for (const catalog of [null, {}, [{ name: '/bad', source: 'prompt' }],
     [{ name: 'bad name', source: 'prompt' }], [{ name: 'bad', source: 'skill' }],
-    [{ name: 'x'.repeat(101), source: 'prompt' }], [{ name: 'bad', source: 'other' }],
-    [{ name: 'review', source: 'prompt', description: {} }]]) {
+    [{ name: 'x'.repeat(16000), source: 'prompt' }], [{ name: 'bad', source: 'other' }]]) {
     const h = harness({ getCommands: () => catalog });
     assert.deepEqual(h.adapter.snapshot(h.params()).commands, []);
     h.prompt({ text: '/review argument' });

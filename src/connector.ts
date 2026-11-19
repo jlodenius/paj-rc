@@ -95,11 +95,11 @@ export function createConnector({ adapter, socketPath, ensureService,
             continue;
           }
           if (frame?.type !== 'request' || typeof frame.id !== 'string' ||
-              frame.id.length > 128 || !['snapshot', 'prompt', 'abort'].includes(frame.method)) {
+              frame.id.length > 128 || !['snapshot', 'commands', 'prompt', 'abort'].includes(frame.method)) {
             return current.destroy();
           }
           try {
-            const result = adapter[frame.method as 'snapshot' | 'prompt' | 'abort'](frame.params);
+            const result = adapter[frame.method as 'snapshot' | 'commands' | 'prompt' | 'abort'](frame.params);
             send({ type: 'response', id: frame.id, ok: true, result });
           } catch (error) {
             send({ type: 'response', id: frame.id, ok: false,

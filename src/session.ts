@@ -1,7 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { validateImages, hashImages } from './images.js';
 import { boundedMessageText as boundedText, MESSAGE_TEXT_LIMIT as TEXT_LIMIT } from '../browser/text.js';
 import type { MainIdentity } from './protocol.js';
+import { MAX_COMMAND_NAME_LENGTH, COMMAND_PAGE_SIZE, COMMAND_PAGE_BYTE_LIMIT } from '../browser/commands.js';
 
 export interface PajSnapshot {
   identity: MainIdentity & { spawnId?: string; parentTaskId?: string; taskId?: string;
@@ -66,12 +67,14 @@ export interface RequestParams {
   deliverAs?: string;
   images?: unknown;
   runId?: string;
+  offset?: number;
+  commandsRevision?: string;
 }
 interface Submission {
   text: string;
   deliverAs: string;
   imageHash: string;
-  result?: { status: string; requestId: string };
+  result?: { status: string; requestId: string; command?: string };
   error?: { code: string; message: string };
 }
 export interface SessionEvent { type: string; [key: string]: unknown }
@@ -130,7 +133,7 @@ export function projectMessage(message: SourceMessage, id: string): ProjectedMes
       ? { customType: 'paj-messages' } : {}) } : null;
 }
 
-function commandCatalog(pi: SessionPI) {
+function commandCatalog(pi: SessionPI, onUnsupported: (name: unknown) => void = () => {}) {
   try {
     if (typeof pi.getCommands !== 'function') return undefined;
     const catalog = pi.getCommands();
@@ -138,14 +141,18 @@ function commandCatalog(pi: SessionPI) {
     const commands = [];
     const seen = new Set();
     for (const entry of catalog) {
-      if (!entry || typeof entry.name !== 'string' || !entry.name || entry.name.length > 100 ||
+      if (typeof entry?.name === 'string') {
+        if (seen.has(entry.name)) continue;
+        seen.add(entry.name);
+      }
+      if (!entry || typeof entry.name !== 'string' || !entry.name || entry.name.length > MAX_COMMAND_NAME_LENGTH ||
           entry.name.startsWith('/') || /[\s\u0000-\u001f\u007f-\u009f]/u.test(entry.name) ||
           !['extension', 'skill', 'prompt'].includes(entry.source) ||
           (entry.source === 'skill' && (!entry.name.startsWith('skill:') || entry.name.length === 6)) ||
-          (entry.description !== undefined && typeof entry.description !== 'string')) return [];
-      if (seen.has(entry.name)) continue;
-      seen.add(entry.name);
-      if (entry.source === 'extension') continue;
+          (entry.description !== undefined && typeof entry.description !== 'string')) {
+        onUnsupported(entry?.name);
+        continue;
+      }
       commands.push({ name: entry.name,
         description: (entry.description || '').replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ').trim().slice(0, 240),
         source: entry.source });
@@ -154,6 +161,20 @@ function commandCatalog(pi: SessionPI) {
   } catch {
     return [];
   }
+}
+
+function commandPage(commands: Command[], offset = 0) {
+  const page: Command[] = [];
+  let bytes = 2;
+  for (const command of commands.slice(offset, offset + COMMAND_PAGE_SIZE)) {
+    const size = Buffer.byteLength(JSON.stringify(command)) + 1;
+    if (bytes + size > COMMAND_PAGE_BYTE_LIMIT) break;
+    page.push(command);
+    bytes += size;
+  }
+  return { commands: page,
+    commandsNext: commands.length > offset + page.length ? offset + page.length : null,
+    commandsRevision: createHash('sha256').update(JSON.stringify(commands)).digest('hex') };
 }
 
 function modelMetadata(model: SessionContext['model']) {
@@ -392,6 +413,13 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     state,
     subscribe(listener: (frame: EventFrame) => void) { listeners.add(listener); return () => listeners.delete(listener); },
     notifyState() { emit({ type: 'state', state: state() }); },
+    commands(params: RequestParams) {
+      validateTarget(params);
+      if (!Number.isSafeInteger(params.offset) || params.offset < 0) fail('invalid_request', 'Invalid command offset');
+      const page = commandPage(commandCatalog(pi) ?? [], params.offset);
+      if (params.commandsRevision !== page.commandsRevision) fail('stale_commands', 'Loaded commands changed; refresh the session');
+      return { generation, ...page };
+    },
     snapshot(params: RequestParams) {
       validateTarget(params);
       const messages: ProjectedMessage[] = [];
@@ -420,7 +448,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
       if (hasMore) messages.shift();
       const commands = commandCatalog(pi);
       return { sessionId, generation, seq, state: state(), messages,
-        ...(commands === undefined ? {} : { commands: commands.slice(0, 128) }),
+        ...(commands === undefined ? {} : commandPage(commands)),
         hasMore, before: hasMore ? messages[0].id : null };
     },
     prompt(params: RequestParams) {
@@ -429,7 +457,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
       const images = validateImages(params.images);
       const imageHash = hashImages(images);
       if (typeof requestId !== 'string' || !/^[\w-]{1,128}$/.test(requestId) ||
-          typeof text !== 'string' || (!text.trim() && !images.length) || Buffer.byteLength(text) > 65536 ||
+          typeof text !== 'string' || text.length > 16000 || (!text.trim() && !images.length) || Buffer.byteLength(text) > 65536 ||
           !['reject', 'steer', 'followUp'].includes(deliverAs)) {
         fail('invalid_request', 'A bounded text, request ID and explicit delivery choice are required');
       }
@@ -441,16 +469,30 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
         if (previous.error) fail(previous.error.code, previous.error.message);
         return { ...previous.result, duplicate: true };
       }
+      const nativeName = text.startsWith('/') ? text.slice(1).split(' ', 1)[0] : null;
+      const promptName = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)?.[1];
+      let unsupported = false;
+      const catalog = commandCatalog(pi, name => {
+        if (typeof name === 'string' && (name === nativeName || name === promptName)) unsupported = true;
+      });
+      if (unsupported) fail('unsupported_command', 'This loaded command has unsupported metadata; invoke it in the Pi terminal');
+      const command = catalog?.find(command => command.name ===
+        (command.source === 'prompt' ? promptName : nativeName));
+      const extensionCommand = command?.source === 'extension';
+      if (extensionCommand && images.length) {
+        fail('command_images', 'Extension commands receive text arguments only; remove photos before sending');
+      }
+      if (terminalDepth > 0) fail('terminal_required', 'Pi is waiting for an interaction in the terminal');
       if (images.length && !state().supportsImages) {
         fail('images_unsupported', 'The selected Pi model does not support images');
       }
       if (paj.getSnapshot().editorBusy) fail('editor_busy', 'An editor request owns this session');
-      const queueDuringRun = !ctx.isIdle() && Boolean(runId) && deliverAs !== 'reject';
+      const queueDuringRun = !ctx.isIdle() && Boolean(runId) && (extensionCommand || deliverAs !== 'reject');
       const reuseLease = leases.size > 0;
       if (reuseLease && (!queueDuringRun || leaseRunId !== runId)) {
         fail('busy', 'A previous submission has not started or settled');
       }
-      if (!ctx.isIdle() && deliverAs === 'reject') fail('busy', 'Choose steering or follow-up explicitly');
+      if (!extensionCommand && !ctx.isIdle() && deliverAs === 'reject') fail('busy', 'Choose steering or follow-up explicitly');
       // Queued input shares its active run's reservation; uncertain idle dispatch stays exclusive.
       const token = reuseLease ? leases.values().next().value : `${generation}:${requestId}`;
       if (!paj.tryReserve(token)) fail('editor_busy', 'An editor request owns this session');
@@ -466,13 +508,15 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
           ...(text.trim() ? [{ type: 'text', text }] : []),
           ...images.map(image => ({ type: 'image', ...image })),
         ] : text;
-        const skillName = text.startsWith('/') ? text.slice(1).split(' ', 1)[0] : null;
-        const promptName = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)?.[1];
-        const expandPromptTemplates = Boolean((skillName || promptName) && commandCatalog(pi)?.some(command =>
-          command.name === (command.source === 'skill' ? skillName : promptName)));
-        pi.sendUserMessage(content, { expandPromptTemplates,
-          ...(deliverAs === 'reject' ? {} : { deliverAs }) });
-        record.result = { status: 'submitted', requestId };
+        pi.sendUserMessage(content, { expandPromptTemplates: Boolean(command),
+          ...(extensionCommand || deliverAs === 'reject' ? {} : { deliverAs }) });
+        // Command dispatch has no public completion event and may never start an agent run.
+        if (extensionCommand && !reuseLease) {
+          leases.delete(token);
+          paj.release(token);
+          leaseRunId = null;
+        }
+        record.result = { status: 'submitted', requestId, ...(extensionCommand ? { command: command.name } : {}) };
         emit({ type: 'state', state: state() });
         return record.result;
       } catch (error) {

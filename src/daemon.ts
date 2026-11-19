@@ -195,7 +195,19 @@ export async function startDaemon(config: Config, options: DaemonOptions): Promi
         response.on('error', () => { streams.delete(client); response.destroy(); });
         return;
       }
-      const route = path.match(/^\/api\/sessions\/([a-zA-Z0-9-]{1,128})\/(snapshot|prompt|image-prompt|abort)$/);
+      const route = path.match(/^\/api\/sessions\/([a-zA-Z0-9-]{1,128})\/(snapshot|commands|prompt|image-prompt|abort)$/);
+      if (route && request.method === 'GET' && route[2] === 'commands') {
+        const offset = url.searchParams.get('offset');
+        const generation = url.searchParams.get('generation');
+        const commandsRevision = url.searchParams.get('revision');
+        if (!offset || !/^(0|[1-9][0-9]*)$/.test(offset) || !Number.isSafeInteger(Number(offset)) ||
+            !generation || generation.length > 128 || !/^[a-f0-9]{64}$/.test(commandsRevision ?? '')) {
+          return fail(response, 400, 'invalid', 'Invalid command cursor');
+        }
+        return json(response, 200, await broker.request(route[1], 'commands', {
+          generation, offset: Number(offset), commandsRevision,
+        }));
+      }
       if (route && request.method === 'GET' && route[2] === 'snapshot') {
         const before = url.searchParams.get('before');
         if (before && before.length > 128) return fail(response, 400, 'invalid', 'Invalid history cursor');

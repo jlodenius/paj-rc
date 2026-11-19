@@ -206,21 +206,59 @@ test('snapshot commands are optional, bounded, and stripped of private native pr
   assert.equal(Object.hasOwn(await broker.request('main', 'snapshot', {}), 'commands'), false);
   commands = [{ name: 'review', description: 'Review changes', source: 'prompt',
     sourceInfo: { path: 'SECRET' }, content: 'SECRET' },
-  { name: 'skill:check', description: '', source: 'skill', template: 'SECRET' }];
+  { name: 'skill:check', description: '', source: 'skill', template: 'SECRET' },
+  { name: 'captain', description: 'Toggle Captain', source: 'extension', handler: 'SECRET' }];
   const snapshot = await broker.request('main', 'snapshot', {});
   assert.deepEqual(snapshot.commands, [
     { name: 'review', description: 'Review changes', source: 'prompt' },
     { name: 'skill:check', description: '', source: 'skill' },
+    { name: 'captain', description: 'Toggle Captain', source: 'extension' },
   ]);
   assert.doesNotMatch(JSON.stringify(snapshot), /SECRET/);
 });
 
-test('broker fails closed on malformed or executable-extension snapshot catalogs', async t => {
+test('command page responses are bounded, revision-matched and stripped of private fields', async t => {
+  const revision = 'a'.repeat(64);
+  const entry = { name: 'captain', source: 'extension', description: 'Enable Captain' };
+  const { broker, connect } = await fixture(t);
+  const socket = await connect(base);
+  await until(() => broker.size === 1);
+  readFrames(socket, frame => {
+    if (frame.type === 'request') writeFrame(socket, { type: 'response', id: frame.id, ok: true,
+      result: { generation: 'forged', commands: [{ ...entry, handler: 'SECRET' }], commandsNext: null,
+        commandsRevision: revision, raw: 'SECRET' } });
+  });
+  const page = await broker.request('main', 'commands', { offset: 128, commandsRevision: revision });
+  assert.deepEqual(page, { generation: 'generation', commands: [entry], commandsNext: null, commandsRevision: revision });
+});
+
+test('broker rejects malformed or mismatched command pages before browser delivery', async t => {
+  const revision = 'a'.repeat(64);
+  const entry = { name: 'captain', source: 'extension', description: '' };
+  const valid = { commands: [entry], commandsNext: null, commandsRevision: revision };
+  const { broker, connect } = await fixture(t);
+  for (const result of [
+    { ...valid, commands: undefined }, { ...valid, commands: Array(129).fill(entry) },
+    { ...valid, commandsNext: 130 }, { ...valid, commandsNext: undefined },
+    { ...valid, commandsRevision: undefined }, { ...valid, commandsRevision: 'bad' },
+    { ...valid, commandsRevision: 'b'.repeat(64) },
+  ]) {
+    const socket = await connect(base);
+    await until(() => broker.list().length === 1);
+    readFrames(socket, frame => {
+      if (frame.type === 'request') writeFrame(socket, { type: 'response', id: frame.id, ok: true, result });
+    });
+    await assert.rejects(broker.request('main', 'commands', { offset: 128, commandsRevision: revision }), { code: 'disconnected' });
+    await until(() => broker.size === 0);
+  }
+});
+
+test('broker fails closed on malformed snapshot catalogs', async t => {
   const { broker, connect } = await fixture(t);
   const valid = { name: 'review', description: 'Review', source: 'prompt' };
-  for (const commands of [null, {}, [null], [{ ...valid, source: 'extension' }],
+  for (const commands of [null, {}, [null], [{ ...valid, source: 'unknown' }],
     [{ ...valid, name: '/review' }], [{ ...valid, name: 'bad name' }],
-    [{ ...valid, name: 'x'.repeat(101) }], [{ ...valid, source: 'skill' }],
+    [{ ...valid, name: 'x'.repeat(16000) }], [{ ...valid, source: 'skill' }],
     [{ ...valid, description: 'x'.repeat(241) }], [{ ...valid, description: 'bad\nvalue' }],
     [valid, valid], Array.from({ length: 129 }, (_, i) => ({ ...valid, name: `p${i}` }))]) {
     const socket = await connect(base);

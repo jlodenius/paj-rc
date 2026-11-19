@@ -19,11 +19,19 @@ export interface Message {
   observed?: boolean;
   submissionStatus?: SubmissionStatus;
 }
+export interface CommandPage {
+  generation: string;
+  commands: Command[];
+  commandsNext?: number | null;
+  commandsRevision?: string;
+}
 export interface Transcript {
   generation: string | null;
   seq: number;
   state: SessionState;
   commands: Command[];
+  commandsNext?: number | null;
+  commandsRevision?: string;
   messages: Message[];
   hasMore: boolean;
   before: string | null;
