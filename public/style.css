@@ -122,7 +122,8 @@ h6::before { content: '###### '; }
 .section-heading h1 { font-size: 14px; }
 .session-filters { display: flex; align-items: center; min-width: 0; white-space: nowrap; }
 .session-filters .session-filter { min-width: 44px; padding-inline: 4px; border: 0; appearance: none; background: transparent; color: var(--text); font-size: 12px; -webkit-tap-highlight-color: transparent; }
-.session-filters .session-filter:first-child { padding-inline-start: 2px; text-align: start; }
+/* Keep All's spare touch width before its three-character label, not before the slash. */
+.session-filters .session-filter:first-child { margin-inline-start: calc(2px - max(4px, 44px - 3ch - 4px)); text-align: end; }
 .session-filters .session-filter:focus:not(:focus-visible) { outline: none; }
 .session-filters .session-filter[aria-pressed="true"] { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 4px; }
 .filter-separator { color: var(--accent); font-size: 12px; font-weight: 500; }

@@ -269,17 +269,40 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
         return range.getBoundingClientRect().left;
       };
       const all = document.querySelector('#filter-all');
-      return { label: textLeft(all), listContent: textLeft(document.querySelector('.session-name-prefix')),
+      const filters = [...document.querySelectorAll('.session-filter')];
+      const slashes = [...document.querySelectorAll('.filter-separator')];
+      const textBounds = element => {
+        const range = document.createRange(); range.selectNodeContents(element);
+        return range.getBoundingClientRect();
+      };
+      return { gaps: slashes.map((slash, index) => textBounds(slash).left - textBounds(filters[index]).right),
+        targets: filters.every((button, index) => {
+          const rect = button.getBoundingClientRect();
+          return rect.left >= 0 && (index === filters.length - 1 || rect.right <= filters[index + 1].getBoundingClientRect().left);
+        }), label: textLeft(all), listContent: textLeft(document.querySelector('.session-name-prefix')),
         slashes: [...document.querySelectorAll('.filter-separator')].map(node => getComputedStyle(node).fontWeight),
         labels: [...document.querySelectorAll('.session-filter')].map(node => getComputedStyle(node).fontWeight),
         otherPadding: ['filter-working', 'filter-idle'].map(id => getComputedStyle(document.getElementById(id)).paddingInlineStart) };
     })()`);
+    assert.ok(Math.abs(alignment.gaps[0] - alignment.gaps[1]) <= 1,
+      `pre-slash text gaps match at ${width}px: ${alignment.gaps}`);
+    assert.ok(alignment.gaps.every(gap => gap >= 3 && gap <= 5), 'both pre-slash text gaps stay compact');
+    assert.equal(alignment.targets, true, 'touch targets stay on screen without overlapping neighbors');
     assert.equal(alignment.label, alignment.listContent, `All text aligns with list content at ${width}px`);
     assert.deepEqual(alignment.slashes, ['500', '500']);
     assert.deepEqual(alignment.labels, ['400', '400', '400']);
     assert.deepEqual(alignment.otherPadding, ['4px', '4px']);
   }
   await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  for (const id of ['filter-all', 'filter-working']) {
+    const edgeTarget = await evaluate(`(() => {
+      const rect = document.getElementById(${JSON.stringify(id)}).getBoundingClientRect();
+      return { x: rect.left + 1, y: rect.top + rect.height / 2 };
+    })()`);
+    await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [edgeTarget] });
+    await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await until(() => evaluate(`document.getElementById(${JSON.stringify(id)}).getAttribute('aria-pressed') === 'true'`));
+  }
   const filterScreenshot = process.env.PAJ_RC_FILTER_SCREENSHOT;
   if (filterScreenshot) {
     await delay(250);
