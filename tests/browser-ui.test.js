@@ -11,6 +11,7 @@ class Element {
     this.scrollTop = 0;
     this.clientHeight = 500;
     this.classList = { add() {}, remove() {}, toggle() {} };
+    this.attributes = new Map();
   }
   get textContent() {
     return (this.text || '') + this.children.map(child => typeof child === 'string' ? child : child.textContent || '').join('');
@@ -19,12 +20,125 @@ class Element {
   replaceChildren(...children) { this.text = ''; this.children = children; }
   append(...children) { this.children.push(...children); }
   prepend(...children) { this.children.unshift(...children); }
-  setAttribute() {}
-  removeAttribute() {}
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  removeAttribute(name) { this.attributes.delete(name); }
   focus() {}
   setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('activity filters follow live busy state, retain Captain order and never change the conversation', async () => {
+  const globals = { document: globalThis.document, fetch: globalThis.fetch, EventSource: globalThis.EventSource };
+  const elements = new Map();
+  const sessions = [
+    { id: 'work', name: 'WorkFirst', state: { busy: true, runId: 'run' } },
+    { id: 'idle-captain', name: 'IdleCaptain', captain: true, state: { busy: false } },
+    { id: 'unknown', name: 'Unknown', state: {} },
+    { id: 'work-captain', name: 'WorkingCaptain', captain: true, state: { busy: true, runId: 'other-run' } },
+    { id: 'idle', name: 'IdleSecond', state: { busy: false } },
+    { id: 'pending', name: 'Pending', state: { busy: true, runId: null } },
+  ].map(session => ({ ...session, generation: `${session.id}-gen` }));
+  let source;
+  let failList = false;
+  globalThis.document = {
+    getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
+    createElement() { return new Element(); },
+  };
+  globalThis.EventSource = class {
+    constructor() { source = this; this.listeners = {}; }
+    addEventListener(type, callback) { this.listeners[type] = callback; }
+    close() {}
+  };
+  globalThis.fetch = async url => {
+    let data;
+    if (url === '/api/auth') data = { authenticated: true };
+    else if (url === '/api/sessions') {
+      if (failList) throw new Error('List unavailable');
+      data = { sessions };
+    }
+    else if (url.endsWith('/snapshot')) data = { generation: 'work-gen', seq: 0,
+      state: sessions[0].state, messages: [{ id: 'reply', role: 'assistant', text: 'Keep this conversation' }], hasMore: false };
+    else throw new Error(`Unexpected URL: ${url}`);
+    return { ok: true, json: async () => structuredClone(data) };
+  };
+  const names = () => elements.get('sessions').children.map(card => card.children[0].textContent.replace(/ Captain$/, ''));
+  const choose = filter => elements.get(`filter-${filter}`).onclick();
+  const pressed = filter => elements.get(`filter-${filter}`).getAttribute('aria-pressed');
+  const sequences = new Map();
+  const update = (index, busy) => {
+    const seq = (sequences.get(index) || 0) + 1;
+    sequences.set(index, seq);
+    sessions[index].state = { busy, runId: null };
+    source.listeners.session({ data: JSON.stringify({ id: sessions[index].id,
+      generation: sessions[index].generation, seq, event: { type: 'state', state: sessions[index].state } }) });
+  };
+  try {
+    await import(`../dist/public/app.js?filters=${Date.now()}`);
+    await settle();
+    source.onopen();
+    await settle();
+    assert.equal(pressed('all'), 'true');
+    assert.equal(pressed('working'), 'false');
+    assert.equal(pressed('idle'), 'false');
+    assert.deepEqual(names(), ['IdleCaptain', 'WorkingCaptain', 'WorkFirst', 'Unknown', 'IdleSecond', 'Pending']);
+    elements.get('sessions').children[2].onclick();
+    await settle();
+    elements.get('prompt').value = 'Keep my draft';
+    choose('working');
+    assert.deepEqual(names(), ['WorkingCaptain', 'WorkFirst', 'Pending']);
+    assert.deepEqual([pressed('all'), pressed('working'), pressed('idle')], ['false', 'true', 'false']);
+    choose('idle');
+    assert.deepEqual(names(), ['IdleCaptain', 'IdleSecond']);
+    assert.equal(elements.get('session-name').textContent, 'WorkFirst');
+    assert.match(elements.get('messages').textContent, /Keep this conversation/);
+    choose('working');
+    update(0, false);
+    assert.deepEqual(names(), ['WorkingCaptain', 'Pending']);
+    assert.equal(pressed('working'), 'true');
+    assert.equal(elements.get('session-name').textContent, 'WorkFirst');
+    update(3, false);
+    update(5, false);
+    assert.deepEqual(names(), []);
+    assert.equal(elements.get('list-empty').hidden, false);
+    assert.match(elements.get('list-empty').textContent, /No working/);
+    choose('idle');
+    const idleNames = ['IdleCaptain', 'WorkingCaptain', 'WorkFirst', 'IdleSecond', 'Pending'];
+    assert.deepEqual(names(), idleNames);
+    source.listeners.sessions();
+    await settle();
+    assert.equal(pressed('idle'), 'true');
+    assert.deepEqual(names(), idleNames);
+    source.onerror();
+    assert.equal(pressed('idle'), 'true');
+    assert.deepEqual(names(), [], 'disconnected cached status is not explicit idle');
+    assert.match(elements.get('list-empty').textContent, /status.*unavailable/i);
+    choose('all');
+    assert.deepEqual(names(), ['IdleCaptain', 'WorkingCaptain', 'WorkFirst', 'Unknown', 'IdleSecond', 'Pending']);
+    choose('idle');
+    source.onopen();
+    await settle();
+    assert.equal(pressed('idle'), 'true');
+    assert.deepEqual(names(), idleNames);
+    assert.equal(elements.get('session-name').textContent, 'WorkFirst');
+    assert.match(elements.get('messages').textContent, /Keep this conversation/);
+    assert.equal(elements.get('prompt').value, 'Keep my draft');
+    for (const index of [0, 1, 3, 4, 5]) update(index, true);
+    assert.deepEqual(names(), []);
+    assert.match(elements.get('list-empty').textContent, /No idle/);
+    choose('working');
+    assert.equal(names().length, 5);
+    failList = true;
+    source.listeners.sessions();
+    await settle();
+    assert.equal(pressed('working'), 'true');
+    assert.deepEqual(names(), [], 'failed list refresh cannot classify cached sessions as working');
+    assert.match(elements.get('list-empty').textContent, /status.*unavailable/i);
+    choose('all');
+    assert.equal(names().length, 6);
+    assert.equal(elements.get('prompt').value, 'Keep my draft');
+  } finally { Object.assign(globalThis, globals); }
+});
 
 test('Captain sessions sort first stably and badges follow activation, revocation and reconnect', async () => {
   const globals = { document: globalThis.document, fetch: globalThis.fetch, EventSource: globalThis.EventSource };

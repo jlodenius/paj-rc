@@ -44,6 +44,10 @@ Select a session and type `/` for loaded extension commands, skills, and prompt 
 loads in bounded pages rather than stopping after 128 entries. Insert a suggestion, add arguments,
 then send. Steering and follow-ups require an explicit choice; uncertain writes are never retried.
 
+Use **All / Working / Idle** to filter the list without changing the selected conversation. Working
+and Idle use the session's explicit busy state; unknown or disconnected status appears only in All.
+Captain sessions remain first within each filtered list.
+
 Extension commands execute immediately, not as steering or follow-ups, and accept text arguments only.
 “Submitted” acknowledges dispatch, not completion or success. Dialogs, notifications, and command errors
 remain in Pi's terminal; the browser shows when terminal interaction is required. Arbitrary custom

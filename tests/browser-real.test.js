@@ -19,7 +19,7 @@ async function until(predicate, timeout = 10000) {
   throw new Error('Browser condition timed out');
 }
 
-test('real mobile browser prioritizes Captains, renders safely, preserves draft focus, and reconnects',
+test('real mobile browser filters live sessions, keeps Captain priority and preserves the conversation',
   { skip: !process.env.PAJ_RC_BROWSER_BIN, timeout: 30000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'paj-rc-browser-'));
   const paths = { runtimeDir: root, socketPath: join(root, 'daemon.sock') };
@@ -122,6 +122,9 @@ test('real mobile browser prioritizes Captains, renders safely, preserves draft 
   await until(() => evaluate('document.querySelector("#key") && document.readyState === "complete"'));
   await until(() => evaluate('navigator.serviceWorker.controller !== null'));
   assert.equal(await evaluate('document.querySelector("#deliver-as").value'), 'steer');
+  assert.equal(await evaluate('document.querySelector("#filter-all")?.getAttribute("aria-pressed")'), 'true');
+  assert.equal(await evaluate('document.querySelector("#session-filters")?.getAttribute("role")'), 'group');
+  assert.equal(await evaluate('document.querySelector("#session-filters")?.textContent.replace(/\\s+/g, " ").trim()'), 'All / Working / Idle');
   const manifest = await call('Page.getAppManifest');
   assert.deepEqual(manifest.errors, []);
   assert.equal(JSON.parse(manifest.data).display, 'standalone');
@@ -143,10 +146,22 @@ test('real mobile browser prioritizes Captains, renders safely, preserves draft 
     captainInspection: '019ab311-a8dc-7000-8000-000000000001', lastHeartbeatMs: Date.now() };
   const secondCaptain = { ...coordinator, id: randomUUID(), piSessionId: randomUUID(),
     name: 'Second coordinator', captainInspection: '019ab311-a8dc-7000-8000-000000000002' };
+  const activity = new Map();
   for (const record of [worker, coordinator, secondCaptain]) {
     records.push(record);
+    const busy = record !== secondCaptain;
+    const ownState = { ...state, busy, runId: busy ? `run-${record.id}` : null };
+    const observers = new Set();
+    let eventSeq = 0;
+    activity.set(record.id, busy => {
+      Object.assign(ownState, { busy, runId: busy ? `run-${record.id}` : null });
+      for (const listener of observers) listener({ type: 'event', seq: ++eventSeq,
+        event: { type: 'state', state: { ...ownState } } });
+    });
     const other = createConnector({ adapter: { ...adapter, identity: record, generation: randomUUID(),
-      subscribe: () => () => {} }, socketPath: paths.socketPath, ensureService: async () => true });
+      state: () => ownState,
+      subscribe(listener) { observers.add(listener); return () => observers.delete(listener); } },
+    socketPath: paths.socketPath, ensureService: async () => true });
     orderConnectors.push(other);
     other.start();
     await until(() => evaluate(`document.querySelectorAll('.session-card').length === ${records.length}`));
@@ -166,6 +181,80 @@ test('real mobile browser prioritizes Captains, renders safely, preserves draft 
     data.sessions.map(session => [session.name, session.captain]))`), [
     ['Backend', false], ['paj-captain', false], ['Coordinator', true], ['Second coordinator', true],
   ]);
+  await call('Emulation.setTouchEmulationEnabled', { enabled: true });
+  const workingTarget = await evaluate(`(() => {
+    const rect = document.querySelector('#filter-working').getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  })()`);
+  await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [workingTarget] });
+  await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await until(async () => JSON.stringify(await cardNames()) === JSON.stringify(['Coordinator', 'paj-captain']));
+  assert.equal(await evaluate('document.querySelector("#filter-working").getAttribute("aria-pressed")'), 'true');
+  assert.equal(await evaluate('document.querySelectorAll(".session-filter[aria-pressed=true]").length'), 1);
+  const beforeFilterRefresh = snapshots;
+  await evaluate('document.querySelector("#refresh").click(); true');
+  await until(() => snapshots > beforeFilterRefresh);
+  assert.equal(await evaluate('document.querySelector("#filter-working").getAttribute("aria-pressed")'), 'true');
+  assert.deepEqual(await cardNames(), ['Coordinator', 'paj-captain']);
+  for (const [scheme, active] of [['light', 'rgb(189, 48, 46)'], ['dark', 'rgb(239, 83, 80)']]) {
+    await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
+    assert.deepEqual(await evaluate(`(() => {
+      const filters = [...document.querySelectorAll('.session-filter')];
+      return { active: getComputedStyle(filters.find(button => button.getAttribute('aria-pressed') === 'true')).color,
+        inactive: filters.filter(button => button.getAttribute('aria-pressed') === 'false')
+          .every(button => getComputedStyle(button).color === getComputedStyle(document.body).color),
+        slashes: [...document.querySelectorAll('.filter-separator')].map(node => getComputedStyle(node).color) };
+    })()`), { active, inactive: true, slashes: ['rgb(239, 83, 80)', 'rgb(239, 83, 80)'] });
+  }
+  await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
+  for (const width of [320, 390, 1440]) {
+    await call('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width < 700 });
+    assert.equal(await evaluate(`(() => {
+      const heading = document.querySelector('.section-heading');
+      const group = document.querySelector('#session-filters').getBoundingClientRect();
+      const refresh = document.querySelector('#refresh').getBoundingClientRect();
+      return heading.scrollWidth <= heading.clientWidth && group.right <= refresh.left &&
+        [...document.querySelectorAll('.session-filter')].every(button => {
+          const rect = button.getBoundingClientRect(); return rect.width >= 44 && rect.height >= 44;
+        });
+    })()`), true, 'filter controls fit mobile and desktop with usable touch targets');
+  }
+  await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  const filterScreenshot = process.env.PAJ_RC_FILTER_SCREENSHOT;
+  if (filterScreenshot) {
+    await delay(250);
+    const shot = await call('Page.captureScreenshot', { format: 'png' });
+    await writeFile(filterScreenshot, Buffer.from(shot.data, 'base64'));
+  }
+  await evaluate('document.querySelector("#filter-idle").focus(); true');
+  assert.equal(await evaluate('document.activeElement.id'), 'filter-idle');
+  await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter',
+    windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r', unmodifiedText: '\r' });
+  await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  assert.equal(await evaluate('document.querySelector("#filter-idle").getAttribute("aria-pressed")'), 'true');
+  await until(async () => JSON.stringify(await cardNames()) === JSON.stringify(['Second coordinator', 'Backend']));
+  assert.equal(await evaluate('getComputedStyle(document.querySelector("#filter-idle")).outlineStyle'), 'solid');
+  assert.equal(await evaluate('document.querySelector("#session-name").textContent'), 'Backend');
+  assert.equal(await evaluate('document.querySelector(".message.paj h2").textContent'), 'Agent review');
+  await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await evaluate('document.querySelector(".session-card[aria-current=true]").click(); true');
+  await until(() => evaluate('document.querySelector(".message.paj h2")'));
+  assert.equal(await evaluate('document.querySelector("#workspace").classList.contains("show-conversation")'), true);
+  await evaluate('document.querySelector("#filter-working").click(); true');
+  activity.get(coordinator.id)(false);
+  await until(async () => JSON.stringify(await cardNames()) === JSON.stringify(['paj-captain']));
+  assert.equal(await evaluate('document.querySelector("#filter-working").getAttribute("aria-pressed")'), 'true');
+  activity.get(worker.id)(false);
+  await until(() => evaluate('!document.querySelector("#list-empty").hidden'));
+  assert.deepEqual(await cardNames(), []);
+  assert.match(await evaluate('document.querySelector("#list-empty").textContent'), /No working/);
+  assert.equal(await evaluate('document.querySelector("#session-name").textContent'), 'Backend');
+  assert.equal(await evaluate('document.querySelector("#workspace").classList.contains("show-conversation")'), true);
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".conversation")).display'), 'flex');
+  await evaluate('document.querySelector("#filter-all").click(); true');
+  await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await evaluate('document.querySelector("#back").click(); true');
+  await until(async () => (await cardNames()).length === 4);
   delete coordinator.captainInspection;
   const disabledOrder = ['Second coordinator', 'Backend', 'paj-captain', 'Coordinator'];
   await until(() => evaluate('document.querySelectorAll(".session-card .captain-badge").length === 1'));

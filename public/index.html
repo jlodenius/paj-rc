@@ -34,9 +34,19 @@
         <span class="brand"><span class="brand-dot" aria-hidden="true"># </span>paj-rc</span>
         <span id="connection" class="connection" role="status">Connecting</span>
       </header>
-      <div class="section-heading"><h1>Main sessions</h1><button id="refresh" class="quiet">Refresh</button></div>
+      <div class="section-heading">
+        <h1 class="visually-hidden">Main agents</h1>
+        <div id="session-filters" class="session-filters" role="group" aria-label="Filter main agents">
+          <button id="filter-all" type="button" class="session-filter" aria-pressed="true">All</button>
+          <span class="filter-separator" aria-hidden="true">/</span>
+          <button id="filter-working" type="button" class="session-filter" aria-pressed="false">Working</button>
+          <span class="filter-separator" aria-hidden="true">/</span>
+          <button id="filter-idle" type="button" class="session-filter" aria-pressed="false">Idle</button>
+        </div>
+        <button id="refresh" class="quiet">Refresh</button>
+      </div>
       <nav id="sessions" aria-label="Choose a session"></nav>
-      <p id="list-empty" class="empty" hidden>No main sessions online.<br>Open Pi on your computer to get started.</p>
+      <p id="list-empty" class="empty" role="status" hidden>No main sessions online.<br>Open Pi on your computer to get started.</p>
       <footer class="sidebar-footer"><span>Private connection</span><button id="logout" class="quiet">Log out</button></footer>
     </aside>
     <main class="conversation">

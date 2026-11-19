@@ -21,6 +21,8 @@ interface Elements {
   'attach-photo': HTMLButtonElement;
   'take-photo': HTMLButtonElement;
 }
+type SessionFilter = 'all' | 'working' | 'idle';
+
 interface ProjectPath { container: HTMLElement; node: HTMLElement; fullPath: string; branch?: HTMLElement }
 interface Photo { mimeType: string; data: string; url: string }
 interface ApiResponse { authenticated?: boolean; csrfToken?: string; sessions?: Session[]; imageUploads?: boolean }
@@ -52,6 +54,9 @@ let csrfToken: string;
 let stream: EventSource | null;
 let connected = false;
 let captainSynced = false;
+let sessionsSynced = false;
+let sessionFilter: SessionFilter = 'all';
+const sessionFilters: SessionFilter[] = ['all', 'working', 'idle'];
 let sessions: Session[] = [];
 let selected: Session | null = null;
 let transcript = createTranscript();
@@ -340,6 +345,8 @@ function showLogin() {
   stream?.close();
   stream = null;
   connected = false;
+  sessionsSynced = false;
+  sessionFilter = 'all';
   csrfToken = undefined;
   selected = null;
   sessions = [];
@@ -348,7 +355,7 @@ function showLogin() {
   listVersion++;
   buffer = [];
   $('messages').replaceChildren();
-  $('sessions').replaceChildren();
+  renderSessions();
   renderHeader();
   $('prompt').value = '';
   $('workspace').hidden = true;
@@ -376,6 +383,7 @@ function start() {
     if (stream !== source) return;
     connected = false;
     captainSynced = false;
+    sessionsSynced = false;
     listVersion++;
     commandListVersion++;
     renderSessions();
@@ -425,6 +433,7 @@ async function refreshSessions(resnapshot = false) {
     imageUploads = data.imageUploads === true;
     sessions = data.sessions;
     captainSynced = connected;
+    sessionsSynced = connected;
     if (selected) {
       const next = sessions.find(session => session.id === selected.id);
       if (!next) {
@@ -446,6 +455,7 @@ async function refreshSessions(resnapshot = false) {
   } catch (error) {
     if (version !== listVersion || !authenticated) return;
     captainSynced = false;
+    sessionsSynced = false;
     renderSessions();
     renderHeader();
     notice(error.message);
@@ -463,7 +473,11 @@ function appendCaptainBadge(node: HTMLElement, session: Session | null) {
 
 function renderSessions() {
   projectPaths = [];
-  const ordered = [...sessions].sort((left, right) => Number(right.captain === true) - Number(left.captain === true));
+  for (const filter of sessionFilters) $('filter-' + filter).setAttribute('aria-pressed', String(sessionFilter === filter));
+  const currentStatus = connected && sessionsSynced;
+  const visible = sessions.filter(session => sessionFilter === 'all' ||
+    currentStatus && session.state?.busy === (sessionFilter === 'working'));
+  const ordered = visible.sort((left, right) => Number(right.captain === true) - Number(left.captain === true));
   const nodes = ordered.map(session => {
     const button = document.createElement('button');
     button.className = 'session-card';
@@ -483,13 +497,19 @@ function renderSessions() {
     const separator = document.createElement('span');
     separator.className = 'session-separator';
     separator.textContent = '·';
-    detail.append(separator, ` ${statusText(session.state)}`);
+    detail.append(separator, ` ${currentStatus ? statusText(session.state) : 'Status unavailable'}`);
     button.append(title, context, detail, metadataRow(session.state, session.model));
     button.onclick = () => selectSession(session);
     return button;
   });
   $('sessions').replaceChildren(...nodes);
-  $('list-empty').hidden = sessions.length !== 0;
+  const empty = $('list-empty');
+  empty.hidden = visible.length !== 0;
+  const message = sessionFilter === 'all'
+    ? 'No main sessions online. Open Pi on your computer to get started.'
+    : !currentStatus ? 'Session status is unavailable. Choose All to see known sessions.'
+      : sessionFilter === 'working' ? 'No working main agents.' : 'No idle main agents.';
+  if (empty.textContent !== message) empty.textContent = message;
   fitProjectPaths();
 }
 
@@ -517,6 +537,7 @@ function statusText(state: SessionState = {}) {
   if (state.terminalRequired) return 'Needs terminal';
   if (state.editorBusy) return 'Editor in control';
   if (awaitingConfirmation(state)) return 'Awaiting Pi confirmation';
+  if (typeof state.busy !== 'boolean') return 'Status unknown';
   return state.busy ? 'Working' : 'Ready';
 }
 
@@ -719,6 +740,9 @@ $('logout').onclick = async () => {
   catch (error) { notice(`Could not confirm logout: ${error.message}`); }
 };
 $('refresh').onclick = () => refreshSessions(true);
+for (const filter of sessionFilters) {
+  $('filter-' + filter).onclick = () => { sessionFilter = filter; renderSessions(); };
+}
 $('back').onclick = () => $('workspace').classList.remove('show-conversation');
 $('prompt').oninput = () => { commandsDismissed = false; renderControls(); };
 $('prompt').onfocus = () => { commandsDismissed = false; renderCommandMenu(); };
