@@ -178,6 +178,7 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
   })()`);
   await until(() => evaluate('document.querySelectorAll(".session-card .captain-badge").length === 2'));
   assert.deepEqual(await cardNames(), initialOrder, 'phone list promotes actual Captain modes, not project/name matches');
+  assert.equal(await evaluate('document.querySelector("#refresh")'), null);
   assert.deepEqual(await cardPaint(), { background: 'rgba(0, 0, 0, 0)', border: 'rgba(0, 0, 0, 0)',
     highlight: 'rgba(0, 0, 0, 0)', outline: 'none' });
   assert.equal(await evaluate(`(() => [...document.querySelectorAll('.session-card')].every(card => {
@@ -231,11 +232,6 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
   await until(async () => JSON.stringify(await cardNames()) === JSON.stringify(['Coordinator', 'paj-captain']));
   assert.equal(await evaluate('document.querySelector("#filter-working").getAttribute("aria-pressed")'), 'true');
   assert.equal(await evaluate('document.querySelectorAll(".session-filter[aria-pressed=true]").length'), 1);
-  const beforeFilterRefresh = snapshots;
-  await evaluate('document.querySelector("#refresh").click(); true');
-  await until(() => snapshots > beforeFilterRefresh);
-  assert.equal(await evaluate('document.querySelector("#filter-working").getAttribute("aria-pressed")'), 'true');
-  assert.deepEqual(await cardNames(), ['Coordinator', 'paj-captain']);
   for (const [scheme, foreground] of [['light', 'rgb(33, 33, 33)'], ['dark', 'rgb(240, 240, 240)']]) {
     await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
     assert.deepEqual(await evaluate(`(() => {
@@ -260,10 +256,9 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
     assert.equal(await evaluate(`(() => {
       const heading = document.querySelector('.section-heading');
       const group = document.querySelector('#session-filters').getBoundingClientRect();
-      const refresh = document.querySelector('#refresh').getBoundingClientRect();
       const sessions = document.querySelector('#sessions');
       return sessions.scrollWidth <= sessions.clientWidth &&
-        heading.scrollWidth <= heading.clientWidth && group.right <= refresh.left &&
+        heading.scrollWidth <= heading.clientWidth && group.right <= heading.getBoundingClientRect().right &&
         [...document.querySelectorAll('.session-filter')].every(button => {
           const rect = button.getBoundingClientRect(); return rect.width >= 44 && rect.height >= 44;
         });
@@ -344,13 +339,6 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
   assert.equal(clickedFilter.background, 'rgba(0, 0, 0, 0)');
   assert.equal(clickedFilter.color, 'rgb(33, 33, 33)');
   assert.equal(clickedFilter.underlineColor, 'rgb(239, 83, 80)');
-  const refreshHover = await evaluate(`(() => {
-    const rect = document.querySelector('#refresh').getBoundingClientRect();
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-  })()`);
-  await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...refreshHover });
-  await until(() => evaluate('document.querySelector("#refresh").matches(":hover") && getComputedStyle(document.querySelector("#refresh")).backgroundColor === "rgb(243, 237, 237)"'));
-  assert.equal(await evaluate('getComputedStyle(document.querySelector("#refresh")).color'), 'rgb(239, 83, 80)');
   assert.equal((await filterPaint('filter-working')).background, 'rgba(0, 0, 0, 0)');
   activity.get(coordinator.id)(false);
   await until(async () => JSON.stringify(await cardNames()) === JSON.stringify(['paj-captain']));
@@ -511,7 +499,6 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
     assert.deepEqual(divider, { width: '1px', colour, gap: '8px', spacing: '10px', lastColour: 'rgba(0, 0, 0, 0)' });
   }
   await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
-  assert.equal(await evaluate('getComputedStyle(document.querySelector("#refresh")).color'), 'rgb(239, 83, 80)');
   assert.equal(await evaluate('getComputedStyle(document.querySelector(".session-separator")).color'), 'rgb(239, 83, 80)');
   const pathCandidates = [identity.projectRoot, ...identity.projectRoot.split('/').filter(Boolean)
     .map((_, index, parts) => `../${parts.slice(index + 1).join('/')}`).slice(0, -1)];
@@ -770,6 +757,19 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
     await writeFile(desktopScreenshotPath, Buffer.from(desktop.data, 'base64'));
   }
   await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  const beforeReload = snapshots;
+  const beforeNavigation = await evaluate('performance.timeOrigin');
+  await call('Page.reload', { ignoreCache: true });
+  await until(async () => await evaluate('performance.timeOrigin') !== beforeNavigation &&
+    (await cardNames()).length === records.length);
+  assert.equal(await evaluate('document.querySelector("#refresh")'), null);
+  assert.equal(await evaluate('document.querySelector("#filter-all").getAttribute("aria-pressed")'), 'true');
+  await evaluate('document.querySelector(".session-card").click(); true');
+  await until(async () => snapshots > beforeReload &&
+    await evaluate('!document.querySelector("#prompt").disabled && document.querySelector(".message.paj h2")'));
+  await evaluate('document.querySelector("#prompt").focus(); true');
+  assert.equal(await evaluate('document.querySelector("#session-name").textContent'), 'Backend');
+  assert.equal(exceptions.length, 0);
   const address = daemon.address;
   config.port = Number(new URL(address).port);
   config.allowedOrigins = [address];

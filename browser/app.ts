@@ -590,7 +590,7 @@ async function refreshSnapshot() {
     if (connected && !resnapshotNeeded) connectionWarning();
     renderTranscript();
   } catch (error) {
-    if (version === selectionVersion) notice(`Could not sync conversation: ${error.message}. Use Refresh to try again.`);
+    if (version === selectionVersion) notice(`Could not sync conversation: ${error.message}. Refresh the page to try again.`);
   } finally {
     if (version === selectionVersion) {
       snapshotting = false;
@@ -628,7 +628,7 @@ async function refreshCommandPages(snapshot: Transcript, id: string, version: nu
       renderControls();
     }
   } catch {
-    if (current()) notice('Could not load every command. Use Refresh to update the command list.');
+    if (current()) notice('Could not load every command. Refresh the page to update the command list.');
   }
 }
 
@@ -746,7 +746,6 @@ $('logout').onclick = async () => {
   try { await api('/api/logout', {}); showLogin(); }
   catch (error) { notice(`Could not confirm logout: ${error.message}`); }
 };
-$('refresh').onclick = () => refreshSessions(true);
 for (const filter of sessionFilters) {
   $('filter-' + filter).onclick = () => { sessionFilter = filter; renderSessions(); };
 }

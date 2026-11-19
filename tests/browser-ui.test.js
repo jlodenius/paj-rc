@@ -79,6 +79,7 @@ test('activity filters follow live busy state, retain Captain order and never ch
     await settle();
     source.onopen();
     await settle();
+    assert.equal(elements.has('refresh'), false, 'no removed control is bound during startup');
     assert.equal(pressed('all'), 'true');
     assert.equal(pressed('working'), 'false');
     assert.equal(pressed('idle'), 'false');
@@ -319,7 +320,7 @@ test('remote commands load every catalog page, execute extensions immediately an
     assert.equal(submissions, 2);
     assert.match(elements.get('notice').textContent, /submitted.*immediately/);
     assert.equal(elements.get('messages').children.length, 0, 'command is not a queued steering receipt');
-    elements.get('refresh').onclick();
+    source.listeners.resync();
     await settle();
     const oldPage = resolvePage;
     elements.get('sessions').children[1].onclick();
@@ -544,7 +545,7 @@ test('browser subscribes before snapshot, reconciles buffered deltas, and never 
     await pendingPrompt;
     assert.equal(elements.get('prompt').value, 'Draft for a replacement generation');
     assert.equal(elements.get('notice').textContent, 'Replacement generation notice');
-    elements.get('refresh').onclick();
+    source.listeners.resync();
     await settle();
     const oldSnapshot = resolveSnapshot;
     const snapshotRequests = requests.filter(request => request.url.endsWith('/snapshot')).length;
