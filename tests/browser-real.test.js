@@ -19,7 +19,7 @@ async function until(predicate, timeout = 10000) {
   throw new Error('Browser condition timed out');
 }
 
-test('real mobile browser pairs, renders safely, preserves draft focus, and reconnects',
+test('real mobile browser prioritizes Captains, renders safely, preserves draft focus, and reconnects',
   { skip: !process.env.PAJ_RC_BROWSER_BIN, timeout: 30000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'paj-rc-browser-'));
   const paths = { runtimeDir: root, socketPath: join(root, 'daemon.sock') };
@@ -65,7 +65,10 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
       submissions.push(params);
       return { status: 'submitted', requestId: params.requestId };
     } };
-  let daemon = await startDaemon(config, { paths, listSessions: async () => [identity] });
+  const records = [identity];
+  const orderConnectors = [];
+  let daemon = await startDaemon(config, { paths, listSessions: async () => records,
+    brokerOptions: { pollIntervalMs: 25 } });
   const connector = createConnector({ adapter, socketPath: paths.socketPath, ensureService: async () => true });
   connector.start();
   const profile = join(root, 'browser');
@@ -77,6 +80,7 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   t.after(async () => {
     socket?.close();
     connector.close();
+    for (const other of orderConnectors) other.close();
     browser.kill('SIGTERM');
     await Promise.race([once(browser, 'exit').catch(() => {}), delay(2000)]);
     if (browser.exitCode === null) browser.kill('SIGKILL');
@@ -132,6 +136,49 @@ test('real mobile browser pairs, renders safely, preserves draft focus, and reco
   await until(() => evaluate('document.querySelector(".session-card .agent-model").textContent === "gpt-6-astra"'));
   await evaluate('document.querySelector(".session-card").click(); true');
   await until(() => evaluate('!document.querySelector("#prompt").disabled && document.querySelector(".message.paj")'));
+  const worker = { ...identity, id: randomUUID(), piSessionId: randomUUID(),
+    name: 'paj-captain', projectRoot: '/projects/paj-captain' };
+  const coordinator = { ...identity, id: randomUUID(), piSessionId: randomUUID(),
+    name: 'Coordinator', projectRoot: '/home/developer/.nixos',
+    captainInspection: '019ab311-a8dc-7000-8000-000000000001', lastHeartbeatMs: Date.now() };
+  const secondCaptain = { ...coordinator, id: randomUUID(), piSessionId: randomUUID(),
+    name: 'Second coordinator', captainInspection: '019ab311-a8dc-7000-8000-000000000002' };
+  for (const record of [worker, coordinator, secondCaptain]) {
+    records.push(record);
+    const other = createConnector({ adapter: { ...adapter, identity: record, generation: randomUUID(),
+      subscribe: () => () => {} }, socketPath: paths.socketPath, ensureService: async () => true });
+    orderConnectors.push(other);
+    other.start();
+    await until(() => evaluate(`document.querySelectorAll('.session-card').length === ${records.length}`));
+  }
+  await evaluate('document.querySelector("#back").click(); true');
+  await until(() => evaluate('getComputedStyle(document.querySelector(".sidebar")).display === "flex"'));
+  const cardNames = () => evaluate('[...document.querySelectorAll(".session-title")].map(node => node.firstChild.textContent.trim())');
+  const initialOrder = ['Coordinator', 'Second coordinator', 'Backend', 'paj-captain'];
+  await until(() => evaluate('document.querySelectorAll(".session-card .captain-badge").length === 2'));
+  assert.deepEqual(await cardNames(), initialOrder, 'phone list promotes actual Captain modes, not project/name matches');
+  assert.equal(await evaluate('document.querySelector(".session-card[aria-current=true] .session-title").firstChild.textContent.trim()'), 'Backend');
+  assert.equal(await evaluate(`(() => {
+    const tops = [...document.querySelectorAll('.session-card')].map(node => node.getBoundingClientRect().top);
+    return tops.every((top, index) => index === 0 || top > tops[index - 1]);
+  })()`), true, 'mobile visual order follows the accessible DOM order');
+  assert.deepEqual(await evaluate(`fetch('/api/sessions').then(response => response.json()).then(data =>
+    data.sessions.map(session => [session.name, session.captain]))`), [
+    ['Backend', false], ['paj-captain', false], ['Coordinator', true], ['Second coordinator', true],
+  ]);
+  delete coordinator.captainInspection;
+  const disabledOrder = ['Second coordinator', 'Backend', 'paj-captain', 'Coordinator'];
+  await until(() => evaluate('document.querySelectorAll(".session-card .captain-badge").length === 1'));
+  assert.deepEqual(await cardNames(), disabledOrder, 'mode revocation restores stable secondary order');
+  coordinator.captainInspection = '019ab311-a8dc-7000-8000-000000000003';
+  coordinator.lastHeartbeatMs = Date.now();
+  await until(() => evaluate('document.querySelectorAll(".session-card .captain-badge").length === 2'));
+  assert.deepEqual(await cardNames(), initialOrder, 'mode reactivation moves the coordinator back above ordinary workers');
+  for (const other of orderConnectors) other.close();
+  records.splice(1);
+  await until(() => evaluate('document.querySelectorAll(".session-card").length === 1'));
+  await evaluate('document.querySelector(".session-card").click(); true');
+  await until(() => evaluate('document.querySelector(".message.paj")'));
   assert.equal(await evaluate('document.querySelector("#session-metadata .agent-model").textContent'), 'gpt-6-astra');
   assert.equal(await evaluate('document.querySelector("#session-metadata .agent-context").textContent'), 'context: 200k/500k');
   state.context = { tokens: null, contextWindow: 500000 };
