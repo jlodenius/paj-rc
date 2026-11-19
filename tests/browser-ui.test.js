@@ -62,7 +62,8 @@ test('activity filters follow live busy state, retain Captain order and never ch
     else throw new Error(`Unexpected URL: ${url}`);
     return { ok: true, json: async () => structuredClone(data) };
   };
-  const names = () => elements.get('sessions').children.map(card => card.children[0].textContent.replace(/ Captain$/, ''));
+  const names = () => elements.get('sessions').children.map(card =>
+    card.children[0].children.find(child => child.className === 'session-label').textContent);
   const choose = filter => elements.get(`filter-${filter}`).onclick();
   const pressed = filter => elements.get(`filter-${filter}`).getAttribute('aria-pressed');
   const sequences = new Map();
@@ -146,7 +147,9 @@ test('Captain sessions sort first stably and badges follow activation, revocatio
   const session = { id: 'captain', name: 'Main', generation: 'generation', state: {}, captain: true };
   const ordinary = { ...session, id: 'ordinary', name: 'Captain by name only', captain: undefined };
   const listed = [ordinary, session];
-  const titles = () => elements.get('sessions').children.map(card => card.children[0].textContent);
+  const titles = () => elements.get('sessions').children.map(card => card.children[0].children
+    .filter(child => child.className !== 'session-name-prefix')
+    .map(child => typeof child === 'string' ? child : child.textContent).join(''));
   let source;
   let pendingList;
   let holdList = false;

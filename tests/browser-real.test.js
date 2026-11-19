@@ -168,11 +168,40 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
   }
   await evaluate('document.querySelector("#back").click(); true');
   await until(() => evaluate('getComputedStyle(document.querySelector(".sidebar")).display === "flex"'));
-  const cardNames = () => evaluate('[...document.querySelectorAll(".session-title")].map(node => node.firstChild.textContent.trim())');
+  const cardNames = () => evaluate('[...document.querySelectorAll(".session-label")].map(node => node.textContent)');
   const initialOrder = ['Coordinator', 'Second coordinator', 'Backend', 'paj-captain'];
+  const cardPaint = () => evaluate(`(() => {
+    const card = document.querySelector('.session-card[aria-current=true]');
+    const style = getComputedStyle(card);
+    return { background: style.backgroundColor, border: style.borderLeftColor,
+      highlight: style.webkitTapHighlightColor, outline: style.outlineStyle };
+  })()`);
   await until(() => evaluate('document.querySelectorAll(".session-card .captain-badge").length === 2'));
   assert.deepEqual(await cardNames(), initialOrder, 'phone list promotes actual Captain modes, not project/name matches');
-  assert.equal(await evaluate('document.querySelector(".session-card[aria-current=true] .session-title").firstChild.textContent.trim()'), 'Backend');
+  assert.deepEqual(await cardPaint(), { background: 'rgba(0, 0, 0, 0)', border: 'rgba(0, 0, 0, 0)',
+    highlight: 'rgba(0, 0, 0, 0)', outline: 'none' });
+  assert.equal(await evaluate(`(() => [...document.querySelectorAll('.session-card')].every(card => {
+    const prefix = card.querySelector('.session-name-prefix');
+    return prefix?.textContent === '#' && prefix.getAttribute('aria-hidden') === 'true' &&
+      getComputedStyle(prefix).color === 'rgb(239, 83, 80)' &&
+      prefix.nextElementSibling.classList.contains('session-label');
+  }))()`), true);
+  const accessibleCards = (await call('Accessibility.getFullAXTree')).nodes.filter(node =>
+    node.role?.value === 'button' && initialOrder.some(name => node.name?.value.startsWith(name + ' ')));
+  assert.equal(accessibleCards.length, 4);
+  assert.ok(accessibleCards.every(node => !node.name.value.includes('#')));
+  await call('Emulation.setTouchEmulationEnabled', { enabled: true });
+  const selectedTarget = await evaluate(`(() => {
+    const rect = document.querySelector('.session-card[aria-current=true]').getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  })()`);
+  await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [selectedTarget] });
+  await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await until(() => evaluate('document.querySelector("#workspace").classList.contains("show-conversation")'));
+  await evaluate('document.querySelector("#back").click(); true');
+  assert.deepEqual(await cardPaint(), { background: 'rgba(0, 0, 0, 0)', border: 'rgba(0, 0, 0, 0)',
+    highlight: 'rgba(0, 0, 0, 0)', outline: 'none' });
+  assert.equal(await evaluate('document.querySelector(".session-card[aria-current=true] .session-label").textContent'), 'Backend');
   assert.equal(await evaluate(`(() => {
     const tops = [...document.querySelectorAll('.session-card')].map(node => node.getBoundingClientRect().top);
     return tops.every((top, index) => index === 0 || top > tops[index - 1]);
@@ -232,7 +261,9 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
       const heading = document.querySelector('.section-heading');
       const group = document.querySelector('#session-filters').getBoundingClientRect();
       const refresh = document.querySelector('#refresh').getBoundingClientRect();
-      return heading.scrollWidth <= heading.clientWidth && group.right <= refresh.left &&
+      const sessions = document.querySelector('#sessions');
+      return sessions.scrollWidth <= sessions.clientWidth &&
+        heading.scrollWidth <= heading.clientWidth && group.right <= refresh.left &&
         [...document.querySelectorAll('.session-filter')].every(button => {
           const rect = button.getBoundingClientRect(); return rect.width >= 44 && rect.height >= 44;
         });
@@ -263,9 +294,23 @@ test('real mobile browser filters live sessions, keeps Captain priority and pres
   assert.equal(await evaluate('document.querySelector("#session-name").textContent'), 'Backend');
   assert.equal(await evaluate('document.querySelector(".message.paj h2").textContent'), 'Agent review');
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
-  await evaluate('document.querySelector(".session-card[aria-current=true]").click(); true');
+  await evaluate('document.querySelector(".session-card[aria-current=true]").focus(); true');
+  assert.equal((await cardPaint()).outline, 'solid');
+  await call('Emulation.setTouchEmulationEnabled', { enabled: false });
+  const desktopCard = await evaluate(`(() => {
+    const rect = document.querySelector('.session-card[aria-current=true]').getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  })()`);
+  await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...desktopCard });
+  await until(() => evaluate('document.querySelector(".session-card[aria-current=true]").matches(":hover")'));
+  assert.equal((await cardPaint()).background, 'rgba(0, 0, 0, 0)');
+  await call('Input.dispatchMouseEvent', { type: 'mousePressed', ...desktopCard, button: 'left', clickCount: 1 });
+  assert.equal((await cardPaint()).background, 'rgba(0, 0, 0, 0)');
+  await call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...desktopCard, button: 'left', clickCount: 1 });
   await until(() => evaluate('document.querySelector(".message.paj h2")'));
   assert.equal(await evaluate('document.querySelector("#workspace").classList.contains("show-conversation")'), true);
+  assert.deepEqual(await cardPaint(), { background: 'rgba(0, 0, 0, 0)', border: 'rgba(0, 0, 0, 0)',
+    highlight: 'rgba(0, 0, 0, 0)', outline: 'none' });
   await call('Emulation.setTouchEmulationEnabled', { enabled: false });
   const desktopTarget = await evaluate(`(() => {
     const rect = document.querySelector('#filter-working').getBoundingClientRect();

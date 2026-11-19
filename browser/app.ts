@@ -484,7 +484,14 @@ function renderSessions() {
     button.setAttribute('aria-current', String(session.id === selected?.id));
     const title = document.createElement('span');
     title.className = 'session-title';
-    title.textContent = session.name || 'Unnamed session';
+    const prefix = document.createElement('span');
+    prefix.className = 'session-name-prefix';
+    prefix.textContent = '#';
+    prefix.setAttribute('aria-hidden', 'true');
+    const name = document.createElement('span');
+    name.className = 'session-label';
+    name.textContent = session.name || 'Unnamed session';
+    title.append(prefix, name);
     appendCaptainBadge(title, session);
     const context = document.createElement('span');
     context.className = 'session-project';

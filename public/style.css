@@ -137,14 +137,16 @@ h6::before { content: '###### '; }
   padding: 16px 12px;
   border-left: 2px solid transparent;
   border-bottom: 1px solid var(--line);
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
   background: transparent;
   color: var(--text);
   text-align: left;
 }
 .session-card:last-child { margin-bottom: 0; border-bottom-color: transparent; }
-.session-card:hover:not(:disabled) { background: var(--selected); }
-.session-card[aria-current="true"] { background: var(--selected); border-left-color: var(--accent); }
+.session-card:focus:not(:focus-visible) { outline: none; }
 .session-title { max-width: 100%; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.session-name-prefix { margin-right: 6px; color: var(--accent); }
 .captain-badge {
   display: inline-block;
   margin-left: 4px;
