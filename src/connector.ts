@@ -68,7 +68,7 @@ export function createConnector({ adapter, socketPath, ensureService,
       current.on('connect', () => {
         if (!adapter.eligible()) return current.destroy();
         send({ type: 'register', protocol: 1, generation: adapter.generation,
-          identity: adapter.identity, state: adapter.state() });
+          identity: adapter.identity, state: adapter.state(), seq: adapter.seq });
       });
       current.on('data', (chunk) => {
         buffer = Buffer.concat([buffer, chunk]);

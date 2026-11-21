@@ -28,6 +28,189 @@ class Element {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+async function withListSync(run) {
+  const globals = { document: globalThis.document, fetch: globalThis.fetch, EventSource: globalThis.EventSource };
+  const elements = new Map();
+  const lists = [];
+  let source;
+  let snapshot = { generation: 'main-gen', seq: 0, state: { busy: false }, messages: [], hasMore: false };
+  let snapshots = 0;
+  let snapshotGate;
+  globalThis.document = {
+    getElementById(id) {
+      if (!elements.has(id)) elements.set(id, new Element());
+      return elements.get(id);
+    },
+    createElement() { return new Element(); },
+  };
+  globalThis.EventSource = class {
+    constructor() { source = this; this.listeners = {}; }
+    addEventListener(type, callback) { this.listeners[type] = callback; }
+    close() {}
+  };
+  globalThis.fetch = async url => {
+    const reply = data => ({ ok: true, json: async () => structuredClone(data) });
+    if (url === '/api/auth') return reply({ authenticated: true });
+    if (url === '/api/sessions') return new Promise((resolve, reject) => {
+      lists.push({ resolve: sessions => resolve(reply({ sessions })), reject });
+    });
+    if (url === '/api/sessions/main/snapshot') {
+      snapshots++;
+      const response = reply(snapshot);
+      await snapshotGate;
+      return response;
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  try {
+    await import(`../dist/public/app.js?list-sync=${withListSync.calls = (withListSync.calls ?? 0) + 1}`);
+    await settle();
+    source.onopen();
+    elements.get('prompt').value = 'A saved draft';
+    await run({ elements, source, lists, snapshots: () => snapshots,
+      setSnapshot: value => { snapshot = { ...snapshot, ...value }; },
+      holdSnapshot() {
+        let release;
+        snapshotGate = new Promise(resolve => { release = resolve; });
+        return () => { snapshotGate = undefined; release(); };
+      } });
+    assert.equal(lists.length, 0);
+  } finally { Object.assign(globalThis, globals); }
+}
+
+const listedSession = (id, stateSeq = 0, busy = false, generation = `${id}-gen`) =>
+  ({ id, generation, name: id, stateSeq, state: { busy, runId: busy ? 'run' : null } });
+
+test('reconnect resnapshots after a failed and then superseded list refresh', () => withListSync(async h => {
+  const main = listedSession('main');
+  h.lists.shift().resolve([main]);
+  await settle();
+  h.elements.get('sessions').children[0].onclick();
+  await settle();
+  assert.equal(h.snapshots(), 1);
+  assert.equal(h.elements.get('send').disabled, false);
+  h.source.onerror();
+  h.source.onopen();
+  h.lists.shift().reject(new Error('Temporary failure'));
+  await settle();
+  h.source.listeners.resync();
+  const delayed = h.lists.shift();
+  h.source.listeners.sessions();
+  const winning = h.lists.shift();
+  delayed.resolve([main]);
+  await settle();
+  assert.equal(h.snapshots(), 1, 'only the winning list may consume resnapshot intent');
+  assert.equal(h.elements.get('send').disabled, true);
+  h.setSnapshot({ seq: 4, state: { busy: true, runId: 'run', editorBusy: false, terminalRequired: false },
+    messages: [{ id: 'new', role: 'assistant', text: 'Updated during the interruption' }] });
+  winning.resolve([main]);
+  await settle();
+  assert.equal(h.snapshots(), 2);
+  assert.match(h.elements.get('messages').textContent, /Updated during the interruption/);
+  assert.equal(h.elements.get('send').disabled, false);
+  assert.equal(h.elements.get('stop').disabled, false);
+  h.source.listeners.sessions();
+  h.lists.shift().resolve([main]);
+  await settle();
+  assert.equal(h.snapshots(), 2, 'ordinary refreshes no longer resnapshot after handoff');
+}));
+
+test('ordinary list refresh can recover reconnect resync intent after a list failure', () => withListSync(async h => {
+  const main = listedSession('main');
+  h.lists.shift().resolve([main]);
+  await settle();
+  h.elements.get('sessions').children[0].onclick();
+  await settle();
+  h.source.onerror();
+  h.source.onopen();
+  h.lists.shift().reject(new Error('Temporary failure'));
+  await settle();
+  h.source.listeners.sessions();
+  h.lists.shift().resolve([main]);
+  await settle();
+  assert.equal(h.snapshots(), 2);
+  assert.equal(h.elements.get('send').disabled, false);
+}));
+
+test('a snapshot started before disconnect cannot re-enable Send during reconnect', () => withListSync(async h => {
+  const main = listedSession('main');
+  h.lists.shift().resolve([main]);
+  await settle();
+  const release = h.holdSnapshot();
+  h.elements.get('sessions').children[0].onclick();
+  h.source.onerror();
+  h.source.onopen();
+  release();
+  await settle();
+  assert.equal(h.elements.get('send').disabled, true);
+  assert.match(h.elements.get('notice').textContent, /reconnecting/i);
+  h.lists.shift().resolve([main]);
+  await settle();
+  assert.equal(h.snapshots(), 2);
+  assert.equal(h.elements.get('send').disabled, false);
+}));
+
+test('rendering delayed transcript events cannot roll back the selected list row', () => withListSync(async h => {
+  const main = listedSession('main');
+  h.lists.shift().resolve([main]);
+  await settle();
+  h.elements.get('sessions').children[0].onclick();
+  await settle();
+  h.elements.get('filter-working').onclick();
+  h.source.listeners.sessions();
+  h.lists.shift().resolve([listedSession('main', 10, true)]);
+  await settle();
+  const visible = () => h.elements.get('sessions').children.length;
+  assert.equal(visible(), 1);
+  h.source.listeners.session({ data: JSON.stringify({ id: main.id, generation: main.generation, seq: 1,
+    event: { type: 'message', message: { id: 'reply', role: 'assistant', text: 'Still renders' } },
+  }) });
+  assert.match(h.elements.get('messages').textContent, /Still renders/);
+  assert.equal(visible(), 1);
+  h.setSnapshot({ seq: 11 });
+  h.source.listeners.resync();
+  h.lists.shift().resolve([listedSession('main', 10, true)]);
+  await settle();
+  assert.equal(visible(), 0, 'a newer snapshot can advance the selected row');
+}));
+
+test('the Working filter merges list and live state for unselected, newly listed and replacement rows',
+  () => withListSync(async h => {
+    const main = listedSession('main');
+    const worker = listedSession('worker');
+    const newcomer = listedSession('newcomer');
+    const publish = row => h.source.listeners.session({ data: JSON.stringify({
+      id: row.id, generation: row.generation, seq: row.stateSeq, event: { type: 'state', state: row.state },
+    }) });
+    const names = () => h.elements.get('sessions').children.map(card =>
+      card.children[0].children.find(child => child.className === 'session-label').textContent);
+    const refresh = () => { h.source.listeners.sessions(); return h.lists.shift(); };
+    h.lists.shift().resolve([main, worker]);
+    await settle();
+    h.elements.get('sessions').children[0].onclick();
+    await settle();
+    h.elements.get('filter-working').onclick();
+    const delayed = refresh();
+    publish(listedSession('worker', 9, true));
+    publish(listedSession('newcomer', 7, true));
+    assert.deepEqual(names(), ['worker']);
+    delayed.resolve([main, worker, newcomer]);
+    await settle();
+    assert.deepEqual(names(), ['worker', 'newcomer'], 'delayed lists cannot regress newer live state');
+    refresh().resolve([main, listedSession('worker', 10), newcomer]);
+    await settle();
+    publish(listedSession('worker', 9, true));
+    assert.deepEqual(names(), ['newcomer'], 'older live state cannot regress newer list state');
+    const replacement = refresh();
+    publish(listedSession('worker', 1, true, 'replacement'));
+    replacement.resolve([main, listedSession('worker', 0, false, 'replacement'),
+      listedSession('newcomer', 0, false, 'newcomer-replacement')]);
+    await settle();
+    assert.deepEqual(names(), ['worker'], 'a replacement accepts its own earlier-in-sequence event, never an old generation');
+    assert.equal(h.elements.get('session-name').textContent, 'main');
+    assert.equal(h.snapshots(), 1);
+  }));
+
 test('activity filters follow live busy state, retain Captain order and never change the conversation', async () => {
   const globals = { document: globalThis.document, fetch: globalThis.fetch, EventSource: globalThis.EventSource };
   const elements = new Map();

@@ -21,13 +21,13 @@ async function fixture(t, options = {}) {
   const broker = await startBroker({ paths, listSessions: async () => [identity],
     onEvent: (type, value) => events.push({ type, value }), ...options });
   t.after(async () => { await broker.close(); await rm(runtimeDir, { recursive: true, force: true }); });
-  async function connect(state) {
+  async function connect(state, seq) {
     const socket = createConnection(paths.socketPath);
     socket.on('error', () => {});
     t.after(() => socket.destroy());
     await once(socket, 'connect');
     socket.resume();
-    writeFrame(socket, { type: 'register', protocol: 1, identity, generation: 'generation', state });
+    writeFrame(socket, { type: 'register', protocol: 1, identity, generation: 'generation', state, seq });
     return socket;
   }
   return { broker, connect, events };
@@ -155,6 +155,37 @@ test('broker accepts legacy state and whitelists metadata across registration, e
     event: { type: 'state', state: { ...base, model: null, context: null } } });
   await until(() => broker.list()[0]?.state.model === null);
   assert.deepEqual(broker.list()[0].state, { ...base, model: null, context: null });
+});
+
+test('list state watermark follows registration, state events and newer snapshots only', async t => {
+  const { broker, connect, events } = await fixture(t);
+  const working = { ...base, busy: true, runId: 'run' };
+  const socket = await connect(working, 5);
+  await until(() => broker.size === 1);
+  const expectState = (seq, state) => {
+    const row = broker.list()[0];
+    assert.equal(row.stateSeq, seq);
+    assert.deepEqual(row.state, state);
+  };
+  expectState(5, working);
+  writeFrame(socket, { type: 'event', seq: 6, event: { type: 'delta' } });
+  await until(() => events.some(event => event.value.seq === 6));
+  expectState(5, working);
+  writeFrame(socket, { type: 'event', seq: 7, event: { type: 'state', state: base } });
+  await until(() => events.some(event => event.value.seq === 7));
+  expectState(7, base);
+  let result = { seq: 6, state: working, messages: [] };
+  readFrames(socket, frame => {
+    if (frame.type === 'request') writeFrame(socket, { type: 'response', id: frame.id, ok: true, result });
+  });
+  await broker.request('main', 'snapshot', {});
+  expectState(7, base);
+  result = { ...result, seq: 8 };
+  await broker.request('main', 'snapshot', {});
+  expectState(8, working);
+  writeFrame(socket, { type: 'event', seq: 8, event: { type: 'state', state: base } });
+  await until(() => events.some(event => event.value.seq === 8));
+  expectState(8, working);
 });
 
 test('broker rejects malformed snapshot state without forwarding it', async t => {

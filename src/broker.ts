@@ -46,6 +46,7 @@ interface Endpoint {
   identity: MainIdentity | null;
   generation: string | null;
   state: SessionState | null;
+  stateSeq: number;
   seq: number;
   lastSeen: number;
   captain: boolean;
@@ -219,7 +220,7 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
     socket.on('error', () => {});
     socket.setTimeout(heartbeatTimeoutMs, () => socket.destroy());
     const endpoint: Endpoint = { socket, identity: null, generation: null, state: null,
-      seq: 0, lastSeen: Date.now(), captain: false, captainExpiresAt: 0, registryRead: 0, pending: new Map() };
+      stateSeq: 0, seq: 0, lastSeen: Date.now(), captain: false, captainExpiresAt: 0, registryRead: 0, pending: new Map() };
     let chain = Promise.resolve();
     let queued = 0;
     const handle = async (frame: Frame) => {
@@ -232,6 +233,7 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
         endpoint.identity = frame.identity;
         endpoint.generation = frame.generation;
         endpoint.state = state(frame.state);
+        endpoint.stateSeq = Number.isSafeInteger(frame.seq) && frame.seq >= 0 ? frame.seq : 0;
         if (!(await validate(endpoint))) throw new Error('Paj registration does not match');
         if (socket.destroyed || closed) return;
         const old = endpoints.get(endpoint.identity.id);
@@ -253,7 +255,11 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
         if (frame.ok === true && pending.method === 'snapshot') {
           result = { ...result, state: state(result?.state),
             ...commandPageMetadata(result) };
-          endpoint.state = result.state;
+          const seq = Number.isSafeInteger(result.seq) ? result.seq as number : endpoint.seq;
+          if (seq >= endpoint.stateSeq) {
+            endpoint.state = result.state;
+            endpoint.stateSeq = seq;
+          }
         }
         if (frame.ok === true && pending.method === 'commands') {
           if (result?.commandsRevision !== pending.commandsRevision) throw new Error('Command catalog changed');
@@ -271,8 +277,12 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
         throw new Error('Invalid session event');
       }
       if (frame.event.type === 'state') {
-        endpoint.state = state(frame.event.state);
-        frame.event = { type: 'state', state: endpoint.state };
+        const eventState = state(frame.event.state);
+        if (frame.seq > endpoint.stateSeq) {
+          endpoint.state = eventState;
+          endpoint.stateSeq = frame.seq;
+        }
+        frame.event = { type: 'state', state: eventState };
       }
       if (frame.seq !== endpoint.seq + 1 && endpoint.seq !== 0) onEvent('resync', {});
       endpoint.seq = frame.seq;
@@ -330,7 +340,7 @@ export async function startBroker({ paths, listSessions, onEvent = () => {}, onM
         name: String(endpoint.identity.name ?? 'Agent').slice(0, 200),
         projectRoot: String(endpoint.identity.projectRoot ?? '').slice(0, 4096),
         branch: typeof endpoint.identity.branch === 'string' ? endpoint.identity.branch.slice(0, 500) : null,
-        state: endpoint.state, captain: endpoint.captain,
+        state: endpoint.state, stateSeq: endpoint.stateSeq, captain: endpoint.captain,
       }));
     },
     async request(id: string, method: string, params: Record<string, unknown>) {

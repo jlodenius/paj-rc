@@ -50,6 +50,7 @@ export interface Session {
   id: string;
   captain?: boolean;
   generation: string;
+  stateSeq?: number;
   state: SessionState;
   name?: string;
   projectRoot?: string;

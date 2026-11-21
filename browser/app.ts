@@ -58,9 +58,11 @@ let sessionsSynced = false;
 let sessionFilter: SessionFilter = 'all';
 const sessionFilters: SessionFilter[] = ['all', 'working', 'idle'];
 let sessions: Session[] = [];
+const pendingSessionStates = new Map<string, { seq: number; state: SessionState }>();
 let selected: Session | null = null;
 let transcript = createTranscript();
 let selectionVersion = 0;
+let snapshotVersion = 0;
 let snapshotting = false;
 let synced = false;
 let resnapshotNeeded = false;
@@ -68,6 +70,7 @@ let buffer: Envelope[] = [];
 let sending = false;
 let stopping = false;
 let listVersion = 0;
+let listResnapshotNeeded = false;
 let commandListVersion = 0;
 let authenticated = false;
 let imageUploads = false;
@@ -350,9 +353,11 @@ function showLogin() {
   csrfToken = undefined;
   selected = null;
   sessions = [];
+  pendingSessionStates.clear();
   transcript = createTranscript();
   selectionVersion++;
   listVersion++;
+  listResnapshotNeeded = false;
   buffer = [];
   $('messages').replaceChildren();
   renderSessions();
@@ -384,8 +389,14 @@ function start() {
     connected = false;
     captainSynced = false;
     sessionsSynced = false;
+    pendingSessionStates.clear();
     listVersion++;
+    listResnapshotNeeded = true;
     commandListVersion++;
+    snapshotVersion++;
+    snapshotting = false;
+    resnapshotNeeded = false;
+    buffer = [];
     renderSessions();
     renderHeader();
     synced = false;
@@ -395,19 +406,25 @@ function start() {
     connectionWarning('Connection interrupted. Work continues in Pi. Reconnecting and checking history…');
     api('/api/auth').then(auth => { if (!auth.authenticated) showLogin(); }).catch(() => {});
   };
-  source.addEventListener('sessions', () => refreshSessions());
-  source.addEventListener('resync', () => refreshSessions(true));
+  source.addEventListener('sessions', () => { if (stream === source) refreshSessions(); });
+  source.addEventListener('resync', () => { if (stream === source) refreshSessions(true); });
   source.addEventListener('session', event => {
     if (stream !== source) return;
     let envelope: Envelope;
     try { envelope = JSON.parse(event.data); } catch { refreshSessions(true); return; }
     const entry = sessions.find(session => session.id === envelope.id);
-    if (entry && entry.generation === envelope.generation) {
-      submissionFeedback.observe(feedbackScope(entry.id, entry.generation), envelope);
-      if (envelope.event?.type === 'state' &&
-          JSON.stringify(entry.state) !== JSON.stringify(envelope.event.state)) {
-        entry.state = { ...envelope.event.state };
-        renderSessions();
+    const matching = entry?.generation === envelope.generation ? entry : undefined;
+    if (matching) submissionFeedback.observe(feedbackScope(matching.id, matching.generation), envelope);
+    if (envelope.event?.type === 'state') {
+      const { seq, event: { state } } = envelope;
+      if (matching) updateSessionState(matching, seq, state);
+      else {
+        const key = JSON.stringify([envelope.id, envelope.generation]);
+        if (seq > (pendingSessionStates.get(key)?.seq ?? -1)) {
+          pendingSessionStates.delete(key);
+          pendingSessionStates.set(key, { seq, state });
+          if (pendingSessionStates.size > 256) pendingSessionStates.delete(pendingSessionStates.keys().next().value);
+        }
       }
     }
     if (envelope.id !== selected?.id) return;
@@ -422,7 +439,16 @@ function start() {
   renderControls();
 }
 
+function updateSessionState(session: Session, seq: number, state: SessionState) {
+  if (seq <= (session.stateSeq ?? -1)) return;
+  session.stateSeq = seq;
+  const changed = JSON.stringify(session.state) !== JSON.stringify(state);
+  session.state = state;
+  if (changed) renderSessions();
+}
+
 async function refreshSessions(resnapshot = false) {
+  listResnapshotNeeded ||= resnapshot;
   const version = ++listVersion;
   captainSynced = false;
   renderSessions();
@@ -430,8 +456,19 @@ async function refreshSessions(resnapshot = false) {
   try {
     const data = await api('/api/sessions');
     if (version !== listVersion || !authenticated) return;
+    const resnapshotSelected = listResnapshotNeeded;
+    listResnapshotNeeded = false;
     imageUploads = data.imageUploads === true;
-    sessions = data.sessions;
+    const previous = new Map(sessions.map(session => [session.id, session]));
+    sessions = data.sessions.map(session => {
+      const pending = pendingSessionStates.get(JSON.stringify([session.id, session.generation]));
+      const known = previous.get(session.id);
+      const live = pending ?? (known?.generation === session.generation && typeof known.stateSeq === 'number'
+        ? { seq: known.stateSeq, state: known.state } : undefined);
+      return live && live.seq > (session.stateSeq ?? -1)
+        ? { ...session, stateSeq: live.seq, state: live.state } : session;
+    });
+    pendingSessionStates.clear();
     captainSynced = connected;
     sessionsSynced = connected;
     if (selected) {
@@ -444,7 +481,7 @@ async function refreshSessions(resnapshot = false) {
         if (changed) selectSession(next, { reveal: false });
         else {
           selected = next;
-          if (resnapshot) refreshSnapshot();
+          if (resnapshotSelected) refreshSnapshot();
         }
       }
     }
@@ -569,6 +606,8 @@ async function refreshSnapshot() {
   if (!selected || !authenticated) return;
   if (snapshotting) { resnapshotNeeded = true; return; }
   const version = selectionVersion;
+  const request = ++snapshotVersion;
+  const current = () => version === selectionVersion && request === snapshotVersion;
   const id = selected.id;
   const commandsVersion = ++commandListVersion;
   snapshotting = true;
@@ -577,7 +616,8 @@ async function refreshSnapshot() {
   renderControls();
   try {
     const snapshot = await api<Transcript>(`/api/sessions/${encodeURIComponent(id)}/snapshot`);
-    if (version !== selectionVersion || !authenticated) return;
+    if (!current() || !authenticated) return;
+    if (selected?.generation === snapshot.generation) updateSessionState(selected, snapshot.seq, snapshot.state);
     transcript = applySnapshot(snapshot);
     synced = true;
     void refreshCommandPages(snapshot, id, version, commandsVersion);
@@ -587,12 +627,12 @@ async function refreshSnapshot() {
         break;
       }
     }
-    if (connected && !resnapshotNeeded) connectionWarning();
+    if (connected && !listResnapshotNeeded && !resnapshotNeeded) connectionWarning();
     renderTranscript();
   } catch (error) {
-    if (version === selectionVersion) notice(`Could not sync conversation: ${error.message}. Refresh the page to try again.`);
+    if (current()) notice(`Could not sync conversation: ${error.message}. Refresh the page to try again.`);
   } finally {
-    if (version === selectionVersion) {
+    if (current()) {
       snapshotting = false;
       buffer = [];
       renderControls();
@@ -662,11 +702,6 @@ function renderHeader() {
 }
 
 function renderTranscript() {
-  if (selected && transcript.generation === selected.generation &&
-      JSON.stringify(selected.state) !== JSON.stringify(transcript.state)) {
-    selected.state = { ...transcript.state };
-    renderSessions();
-  }
   const viewport = $('transcript');
   const nearBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 100;
   const messages = selected ? submissionFeedback.messages(feedbackScope(selected.id, transcript.generation), transcript.messages) : transcript.messages;
@@ -705,7 +740,8 @@ function extensionCommand() {
 
 function renderControls() {
   const command = extensionCommand();
-  const ready = authenticated && connected && selected && synced && transcript.generation && !snapshotting;
+  const ready = authenticated && connected && selected && synced && transcript.generation &&
+    !snapshotting && !listResnapshotNeeded;
   const blocked = transcript.state.editorBusy || transcript.state.terminalRequired;
   const pending = awaitingConfirmation(transcript.state);
   workingIndicator.hidden = !(authenticated && connected && selected && transcript.generation &&

@@ -44,7 +44,7 @@ async function fixture(t, options = {}) {
     });
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
-  const adapter = { generation: 'generation', identity: { id: 'paj' },
+  const adapter = { generation: 'generation', seq: 1, identity: { id: 'paj' },
     eligible: () => eligible, state: () => ({ busy: false }),
     subscribe(fn) { subscribed = fn; return () => { subscribed = undefined; }; },
     prompt() { prompts++; return { status: 'submitted' }; },
@@ -78,6 +78,7 @@ test('registration, heartbeat, request routing, errors and bounded event path', 
   h.connector.start();
   await until(() => h.frames.some((frame) => frame.type === 'heartbeat'));
   assert.equal(h.frames[0].generation, 'generation');
+  assert.equal(h.frames[0].seq, 1);
   assert.equal(h.frames[0].protocol, 1);
   const socket = [...h.sockets][0];
   socket.write(JSON.stringify({ type: 'request', id: 'read', method: 'snapshot', params: {} }) + '\n' +
@@ -96,8 +97,10 @@ test('disconnect reconnects without canceling Pi or replaying writes', async (t)
   const socket = [...h.sockets][0];
   socket.write(JSON.stringify({ type: 'request', id: 'write', method: 'prompt', params: {} }) + '\n');
   await until(() => h.prompts() === 1);
+  h.adapter.seq = 12;
   socket.destroy();
   await until(() => h.frames.filter((frame) => frame.type === 'register').length === 2);
+  assert.deepEqual(h.frames.filter(frame => frame.type === 'register').map(frame => frame.seq), [1, 12]);
   assert.equal(h.prompts(), 1);
   assert.equal(h.closed(), false);
   assert.ok(h.ensured() >= 2);

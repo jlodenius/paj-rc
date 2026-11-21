@@ -408,6 +408,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
   }
   return {
     generation,
+    get seq() { return seq; },
     identity,
     eligible,
     state,
