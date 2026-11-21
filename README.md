@@ -6,6 +6,9 @@ Pi 1.2+, and the latest Paj CLI and extension.
 
 ## Install
 
+First [install the Paj CLI and Pi extension](https://github.com/jlodenius/paj#install).
+Keep `paj` on the Pi session's `PATH`.
+
 ```sh
 npm install -g git+https://github.com/jlodenius/paj-rc.git
 pi install "$(npm root -g)/paj-rc"
@@ -23,9 +26,13 @@ home.file.".pi/agent/extensions/paj-rc".source =
   "${inputs.paj-rc.packages.${pkgs.stdenv.hostPlatform.system}.default}/lib/node_modules/paj-rc";
 ```
 
+With Home Manager, skip `pi install` for paj-rc.
+
 ## Pair
 
-In an eligible main Pi TUI, reload and approve the one-time private user-service setup:
+Use a live, interactive main Pi session (`primary` in Paj) with a matching Paj registration.
+Subagents and noninteractive sessions are not browser targets. In Pi, reload and approve the
+private user-service setup:
 
 ```text
 /reload
@@ -38,7 +45,15 @@ paj-rc key
 ```
 
 Open <http://127.0.0.1:43187> and enter the key. Treat it like a password: paired browsers can control
-Pi and its tools. The service is not enabled at login. Use `paj-rc --help` for settings and revocation.
+Pi and its tools. Select your main session and check that its conversation appears.
+The service starts on demand, not at login. If your session is missing, check `/rc status` in Pi
+and confirm the session appears in `paj --json session list --all` from the same environment.
+Use `paj-rc --help` for settings and revocation.
+
+If you change the [shared Paj runtime](https://github.com/jlodenius/paj#shared-runtime), start Pi
+with the new absolute `PAJ_RUNTIME_DIR` and rerun `/rc setup`. Setup records the value in the user
+service; changing your shell alone does not update it. If the service is already running, restart
+it with `systemctl --user try-restart paj-rc.service`, then check `/rc status`.
 
 Select a session and type `/` for loaded extension commands, skills, and prompt templates. The list
 loads in bounded pages rather than stopping after 128 entries. Insert a suggestion, add arguments,
@@ -56,7 +71,8 @@ Command names must contain no whitespace or control characters and fit the 16,00
 limit. Unsupported catalog entries do not hide other commands; invoking one is rejected, not sent to
 the model as ordinary text.
 
-A **Captain** badge marks sessions with Paj's live Captain capability. It follows the existing registry
+A **Captain** badge marks sessions with the live [Captain](https://github.com/jlodenius/paj-captain)
+capability. It follows the existing registry
 poll (normally every five seconds), not names or historic mode entries. Missing, malformed, or stale
 capabilities show no badge; badges are hidden while reconnecting or awaiting a fresh session list.
 This is an advisory capability indicator, not authorization or an instantaneous runtime-mode guarantee.
