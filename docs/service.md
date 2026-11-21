@@ -47,23 +47,9 @@ Home Manager installs a link at `$XDG_CONFIG_HOME/systemd/user/paj-rc.service` (
 and an idle shutdown is not a failure. If Pi uses a custom `PAJ_RUNTIME_DIR`, pass the same
 value in the service's `Environment`.
 
-A normal update of the `paj` and `paj-rc` flake inputs followed by your NixOS switch (or
-Home Manager switch for a standalone Home Manager installation) updates both executable paths in
-the unit. An already running daemon uses the old binaries until it restarts. If activation did
-not restart it, use `systemctl --user try-restart paj-rc.service` to pick up the new paths without
-starting an idle service. Reload existing Pi sessions to use their updated extensions.
-
 Keep `$XDG_CONFIG_HOME/paj-rc/` out of Nix; it holds private settings, the pairing key, and browser
-sessions. `serve --paj` uses the pinned executable instead of any old path in that directory,
-without overwriting it. First start creates owner-private defaults only if no config exists.
-Existing settings and paired browsers survive the switch.
-
-**One-time handoff from standalone:** with the new unit ready to activate, stop the old user
-service. If the old `paj-rc.service` in the user config directory is a regular file installed by
-`paj-rc setup`, move just that file to a private backup outside the unit directory. Leave the
-private `paj-rc/` config directory untouched. Activate Home Manager and check that it owns the
-unit link, then reload Pi and check `/rc status`. Don't run standalone setup or uninstall while
-switching. Use Home Manager to change or remove the managed unit.
+sessions. `serve --paj` uses the executable pinned in the unit without changing that config.
+Use Home Manager to change or remove the managed unit.
 
 ## Changing the shared Paj runtime
 

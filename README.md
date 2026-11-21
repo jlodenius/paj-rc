@@ -54,4 +54,4 @@ Add to Home Screen or Install App action.
 ## Reference
 
 - [Browser controls, privacy, and development](docs/reference.md)
-- [Home Manager updates and handoff from standalone](docs/service.md#home-manager-service)
+- [Home Manager service configuration](docs/service.md#home-manager-service)
