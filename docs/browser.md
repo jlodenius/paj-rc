@@ -1,4 +1,4 @@
-# paj-rc reference
+# Browser controls and privacy
 
 [Back to pairing](../README.md#pair).
 
@@ -35,18 +35,3 @@ Only the public app shell is cached, never credentials, conversations, photos, o
 stay
 in browser memory until submitted; Pi and its provider then handle them as normal input. Closing the
 browser does not stop work. Context counts are estimates, not billing totals.
-
-## Develop
-
-```sh
-npm ci --cache .cache/npm
-npm run typecheck
-npm test
-nix build
-```
-
-Node sources live in `src/`, browser sources in `browser/`, and the Pi entry in `extensions/`.
-Typechecking covers all three using the pinned development SDK; it is not shipped at runtime.
-The build emits executable browser JavaScript and copies static assets to `dist/public/`.
-Optional integration tests use `PAJ_RC_PI_BIN`, `PAJ_RC_PI_MODULE`, or `PAJ_RC_BROWSER_BIN`; no
-sibling checkout is required.

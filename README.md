@@ -53,5 +53,6 @@ Add to Home Screen or Install App action.
 
 ## Reference
 
-- [Browser controls, privacy, and development](docs/reference.md)
-- [Home Manager service configuration](docs/service.md#home-manager-service)
+- [Browser controls and privacy](docs/browser.md)
+- [Service configuration](docs/service.md)
+- [Development](docs/development.md)
