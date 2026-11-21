@@ -3,8 +3,8 @@ import { randomBytes } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defaultOrigins, getPaths, loadConfig, saveConfig, validateOrigin } from './config.js';
-import { installService, restartService, serviceStatus, uninstallService } from './service.js';
+import { defaultOrigins, getPaths, loadConfig, loadOrInitializeConfig, saveConfig, validateOrigin, validatePajCommand } from './config.js';
+import { installService, resolveExecutable, restartService, serviceStatus, uninstallService } from './service.js';
 
 import type { Paths } from './config.js';
 import type { startDaemon } from './daemon.js';
@@ -26,7 +26,7 @@ origin add|remove ORIGIN       Change exact allowed browser origins
 key                           Show the permanent pairing key explicitly
 rotate                        Revoke browser cookies and replace pairing key (not shown)
 uninstall --yes               Stop/remove unit; retain private config
-serve                         Run the daemon (normally managed by systemd)
+serve [--paj ABSOLUTE_PATH]   Run daemon; explicit Paj path supports externally managed units
 `;
 
 function options(args: string[], allowed: string[]) {
@@ -70,7 +70,14 @@ export async function main(args = process.argv.slice(2), { paths = getPaths(),
     output(`Service removed. Private configuration retained at ${paths.configFile}`);
     return;
   }
-  const config = loadConfig(paths);
+  const serveFlags = command === 'serve' ? options(rest, ['--paj']) : {};
+  const override = serveFlags['--paj'];
+  let pinnedPaj: string | undefined;
+  if (override !== undefined) {
+    validatePajCommand(override);
+    pinnedPaj = resolveExecutable(override);
+  }
+  const config = pinnedPaj ? loadOrInitializeConfig(paths) : loadConfig(paths);
   if (!config) throw new Error('Not configured. Run setup --yes after reviewing the README.');
   if (command === 'key') {
     options(rest, []);
@@ -108,10 +115,11 @@ export async function main(args = process.argv.slice(2), { paths = getPaths(),
     restartService(serviceOptions);
     output('Pairing key rotated; existing browser sessions revoked. Run key explicitly to pair again.');
   } else if (command === 'serve') {
-    options(rest, []);
+    const pajCommand = pinnedPaj ?? config.pajCommand;
+    validatePajCommand(pajCommand);
     const factory = daemonFactory || (await import('./daemon.js')).startDaemon;
     let daemon: Awaited<ReturnType<typeof startDaemon>>;
-    daemon = await factory(config, { paths, onIdle: async () => { await daemon.close(); } });
+    daemon = await factory({ ...config, pajCommand }, { paths, onIdle: async () => { await daemon.close(); } });
     for (const signal of ['SIGINT', 'SIGTERM']) {
       process.once(signal, () => { Promise.resolve(daemon.close()).catch(error => {
         console.error(error.message);

@@ -1,10 +1,12 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
-import { accessSync, constants, existsSync, lstatSync, mkdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, linkSync, lstatSync, mkdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_IDLE_TIMEOUT_MS, DEFAULT_PORT, defaultOrigins, getPaths, loadConfig, privateDirectory, saveConfig } from './config.js';
+import { defaultConfig, getPaths, loadConfig, privateDirectory, saveConfig } from './config.js';
+
+import type { Paths } from './config.js';
 
 const UNIT = 'paj-rc.service';
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -59,34 +61,59 @@ export function renderUnit({ nodePath, cliPath, env = process.env }: { nodePath:
   return `[Unit]\nDescription=Private browser control for live Paj sessions\nStartLimitIntervalSec=60\nStartLimitBurst=5\n\n[Service]\nType=simple\n${environment}\nExecStart=${unitArgument(nodePath)} ${unitArgument(cliPath)} serve\nRestart=on-failure\nRestartSec=2\nUMask=0077\nNoNewPrivileges=yes\n`;
 }
 
+function serviceFileStat(paths: Paths) {
+  try { return lstatSync(paths.serviceFile); } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
+  }
+}
+
+function hasUsableServiceFile(paths: Paths) {
+  try {
+    const stat = statSync(paths.serviceFile);
+    return stat.isFile() && stat.size > 0;
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ELOOP') return false;
+    throw error;
+  }
+}
+
+export function managedServiceState(paths = getPaths()) {
+  if (!serviceFileStat(paths)?.isSymbolicLink()) return null;
+  return hasUsableServiceFile(paths) ? 'installed' : 'unavailable';
+}
+
+function assertLocalService(paths: Paths) {
+  const stat = serviceFileStat(paths);
+  if (stat?.isSymbolicLink()) throw new Error('Service unit is externally managed; change it in its declarative configuration');
+  if (stat && (!stat.isFile() || stat.uid !== process.getuid())) {
+    throw new Error('Refusing to modify a nonregular or foreign-owned service file');
+  }
+  return stat;
+}
+
 export async function installService({ approved = false, paths = getPaths(), env = process.env,
   nodePath = process.execPath, pajCommand = 'paj', packageDir = packageRoot,
   execute = executeSystemctl } = {}) {
   if (!approved) throw new Error('Setup requires explicit approval (--yes)');
+  const existingUnit = assertLocalService(paths);
   const node = resolveExecutable(nodePath, env);
   const paj = resolveExecutable(pajCommand, env);
   const cliPath = realpathSync(join(packageDir, 'dist', 'src', 'cli.js'));
   const unit = renderUnit({ nodePath: node, cliPath, env });
-  const existing = loadConfig(paths);
-  const config = existing ? { ...existing, pajCommand: paj } : {
-    version: 1, port: DEFAULT_PORT, idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
-    allowedOrigins: defaultOrigins(DEFAULT_PORT), pairingKey: randomBytes(32).toString('base64url'),
-    pajCommand: paj,
-  };
+  const config = { ...(loadConfig(paths) ?? defaultConfig()), pajCommand: paj };
   saveConfig(config, paths);
   privateDirectory(paths.runtimeDir);
   mkdirSync(dirname(paths.serviceFile), { recursive: true });
-  let serviceStat;
-  try { serviceStat = lstatSync(paths.serviceFile); } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-  if (serviceStat && (!serviceStat.isFile() || serviceStat.uid !== process.getuid())) {
-    throw new Error('Refusing to replace a nonregular or foreign-owned service file');
-  }
+  assertLocalService(paths);
   const temporary = `${paths.serviceFile}.${randomBytes(8).toString('hex')}.tmp`;
   try {
     writeFileSync(temporary, unit, { mode: 0o600, flag: 'wx' });
-    renameSync(temporary, paths.serviceFile);
+    if (existingUnit) {
+      const current = assertLocalService(paths);
+      if (current?.ino !== existingUnit.ino || current?.dev !== existingUnit.dev) throw new Error('Service file changed during setup');
+      renameSync(temporary, paths.serviceFile);
+    } else linkSync(temporary, paths.serviceFile);
   } finally {
     try { unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
@@ -95,31 +122,35 @@ export async function installService({ approved = false, paths = getPaths(), env
 }
 
 export async function ensureService({ paths = getPaths(), execute = executeSystemctlAsync } = {}) {
-  if (!loadConfig(paths) || !existsSync(paths.serviceFile)) return false;
+  if (!hasUsableServiceFile(paths) || (!loadConfig(paths) && managedServiceState(paths) !== 'installed')) return false;
   await execute(['start', UNIT]);
   return true;
 }
 
 export function serviceStatus({ paths = getPaths(), execute = executeSystemctl } = {}) {
-  if (!loadConfig(paths)) return { configured: false, installed: false, active: false };
-  const installed = existsSync(paths.serviceFile);
+  const configured = Boolean(loadConfig(paths));
+  const managed = managedServiceState(paths);
+  const installed = managed ? managed === 'installed' : configured && hasUsableServiceFile(paths);
   let active = false;
   if (installed) {
     try { active = String(execute(['is-active', UNIT])).trim() === 'active'; } catch {}
   }
-  return { configured: true, installed, active };
+  return { configured, installed, active, ...(managed ? { managed: true } : {}) };
 }
 
 export function restartService({ paths = getPaths(), execute = executeSystemctl } = {}) {
-  if (!loadConfig(paths) || !existsSync(paths.serviceFile)) return false;
+  if (!loadConfig(paths) || !hasUsableServiceFile(paths)) return false;
   execute(['try-restart', UNIT]);
   return true;
 }
 
 export function uninstallService({ approved = false, paths = getPaths(), execute = executeSystemctl } = {}) {
   if (!approved) throw new Error('Uninstall requires explicit approval (--yes)');
-  if (existsSync(paths.serviceFile)) {
+  const unit = assertLocalService(paths);
+  if (unit) {
     execute(['disable', '--now', UNIT]);
+    const current = assertLocalService(paths);
+    if (current?.ino !== unit.ino || current?.dev !== unit.dev) throw new Error('Service file changed during uninstall');
     unlinkSync(paths.serviceFile);
     execute(['daemon-reload']);
   }

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
@@ -9,7 +9,7 @@ export interface Config {
   idleTimeoutMs: number;
   allowedOrigins: string[];
   pairingKey: string;
-  pajCommand: string;
+  pajCommand?: string;
 }
 export type Paths = ReturnType<typeof getPaths>;
 
@@ -50,6 +50,12 @@ export function validateOrigin(origin: string) {
   return origin;
 }
 
+export function validatePajCommand(command: unknown): asserts command is string {
+  if (typeof command !== 'string' || !isAbsolute(command) || /[\0\r\n]/.test(command)) {
+    throw new Error('pajCommand must be an absolute executable path');
+  }
+}
+
 export function validateConfig(config: Config) {
   if (!config || config.version !== 1) throw new Error('Unsupported configuration version');
   if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
@@ -65,9 +71,7 @@ export function validateConfig(config: Config) {
   if (typeof config.pairingKey !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(config.pairingKey)) {
     throw new Error('Invalid pairing key');
   }
-  if (typeof config.pajCommand !== 'string' || !isAbsolute(config.pajCommand) || /[\0\r\n]/.test(config.pajCommand)) {
-    throw new Error('pajCommand must be an absolute executable path');
-  }
+  if (config.pajCommand !== undefined) validatePajCommand(config.pajCommand);
   return config;
 }
 
@@ -92,13 +96,36 @@ export function loadConfig(paths = getPaths()) {
   return validateConfig(JSON.parse(readFileSync(paths.configFile, 'utf8')));
 }
 
+export function defaultConfig(): Config {
+  return { version: 1, port: DEFAULT_PORT, idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
+    allowedOrigins: defaultOrigins(DEFAULT_PORT), pairingKey: randomBytes(32).toString('base64url') };
+}
+
+export function loadOrInitializeConfig(paths: Paths): Config {
+  const existing = loadConfig(paths);
+  if (existing) return existing;
+  try { return writeConfig(defaultConfig(), paths, true); }
+  catch (error) {
+    if (error.code === 'EEXIST') {
+      const created = loadConfig(paths);
+      if (created) return created;
+    }
+    throw error;
+  }
+}
+
 export function saveConfig(config: Config, paths = getPaths()) {
+  return writeConfig(config, paths, false);
+}
+
+function writeConfig(config: Config, paths: Paths, createOnly: boolean) {
   validateConfig(config);
   privateDirectory(paths.configDir);
   const temporary = `${paths.configFile}.${randomBytes(8).toString('hex')}.tmp`;
   try {
     writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-    renameSync(temporary, paths.configFile);
+    if (createOnly) linkSync(temporary, paths.configFile);
+    else renameSync(temporary, paths.configFile);
   } finally {
     try { unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }

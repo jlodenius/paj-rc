@@ -6,7 +6,7 @@ import test from 'node:test';
 import { setImmediate as immediate } from 'node:timers/promises';
 import { installRemoteExtension } from '../extensions/index.ts';
 
-function harness({ configured = true, mode = 'tui', role = 'primary', ready = true,
+function harness({ configured = true, managed = null, mode = 'tui', role = 'primary', ready = true,
   version = 1, env = {}, approved = false, confirm, execute } = {}) {
   const bus = new EventEmitter();
   const events = new Map();
@@ -40,6 +40,7 @@ function harness({ configured = true, mode = 'tui', role = 'primary', ready = tr
     getPaths: () => ({ socketPath: '/private/socket' }),
     loadConfig: () => configured ? { version: 1, port: 43187, idleTimeoutMs: 30000,
       allowedOrigins: ['http://127.0.0.1:43187'], pairingKey: 'SECRET', pajCommand: '/private/paj' } : null,
+    managedServiceState: () => managed,
     ensureService() { calls.push('ensure'); },
     createSessionAdapter() {
       calls.push('adapter');
@@ -78,6 +79,36 @@ test('factory is inert and only configured, registered main TUI starts service',
   h.stop();
   h.stop();
   assert.equal(h.calls.filter((call) => call === 'connector-close').length, 1);
+});
+
+test('managed unit starts from an eligible session before config exists, without offering setup', async () => {
+  const h = harness({ configured: false, managed: 'installed', approved: true });
+  h.start();
+  assert.deepEqual(h.calls, ['adapter', 'connector', 'start', 'ensure']);
+  await h.command('status');
+  assert.match(h.notices.at(-1), /externally managed/);
+  await h.command('setup');
+  assert.match(h.notices.at(-1), /externally managed/);
+  assert.deepEqual(h.confirmations, []);
+  assert.deepEqual(h.executions, []);
+  h.stop();
+  const child = harness({ configured: false, managed: 'installed', role: 'subagent' });
+  child.start();
+  assert.deepEqual(child.calls, []);
+  child.stop();
+});
+
+test('unavailable managed unit warns without retrying or offering setup', async () => {
+  const h = harness({ managed: 'unavailable' });
+  h.start();
+  await h.command('status');
+  assert.match(h.notices.at(-1), /managed service unavailable/);
+  await h.command('setup');
+  assert.match(h.notices.at(-1), /externally managed/);
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.confirmations, []);
+  assert.deepEqual(h.executions, []);
+  h.stop();
 });
 
 test('registration readiness and removal refresh without child fallback', async () => {

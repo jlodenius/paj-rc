@@ -28,11 +28,25 @@ home.file.".pi/agent/extensions/paj-rc".source =
 
 With Home Manager, skip `pi install` for paj-rc.
 
+To also manage the **user service** declaratively, install `paj-rc.service` as a Home Manager
+symlink in `$XDG_CONFIG_HOME/systemd/user/` (normally `~/.config/systemd/user/`). Set `ExecStart`
+to the absolute `paj-rc` executable followed by `serve --paj /absolute/path/to/paj`, using the
+pinned Paj CLI from the same configuration. Keep the unit on demand (no `Install.WantedBy`),
+with `Restart=on-failure`, `UMask=0077`, and `NoNewPrivileges=yes`. If Pi uses a custom
+`PAJ_RUNTIME_DIR`, set the same value in the unit's environment.
+
+If migrating from standalone setup, move the old regular unit out of the way before Home Manager
+activation. Don't run standalone setup or uninstall during activation. Keep
+`$XDG_CONFIG_HOME/paj-rc/`, including its pairing key and browser sessions. The daemon creates
+private defaults on first start only if no config exists. `--paj` overrides the old executable
+path without saving it to private config. Skip `/rc setup` for a declarative unit; reload Pi,
+then check `/rc status`. Change the unit through Home Manager, not `paj-rc setup` or `uninstall`.
+
 ## Pair
 
 Use a live, interactive main Pi session (`primary` in Paj) with a matching Paj registration.
-Subagents and noninteractive sessions are not browser targets. In Pi, reload and approve the
-private user-service setup:
+Subagents and noninteractive sessions are not browser targets. In Pi, reload and, for standalone
+installations, approve the private user-service setup:
 
 ```text
 /reload
@@ -51,9 +65,10 @@ and confirm the session appears in `paj --json session list --all` from the same
 Use `paj-rc --help` for settings and revocation.
 
 If you change the [shared Paj runtime](https://github.com/jlodenius/paj#shared-runtime), start Pi
-with the new absolute `PAJ_RUNTIME_DIR` and rerun `/rc setup`. Setup records the value in the user
-service; changing your shell alone does not update it. If the service is already running, restart
-it with `systemctl --user try-restart paj-rc.service`, then check `/rc status`.
+with the new absolute `PAJ_RUNTIME_DIR`. Update a declarative unit through Home Manager, or rerun
+`/rc setup` for a standalone unit. Changing your shell alone does not update the service. If the
+service is already running, restart it with `systemctl --user try-restart paj-rc.service`, then
+check `/rc status`.
 
 Select a session and type `/` for loaded extension commands, skills, and prompt templates. The list
 loads in bounded pages rather than stopping after 128 entries. Insert a suggestion, add arguments,

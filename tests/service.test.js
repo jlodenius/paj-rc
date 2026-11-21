@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { getPaths, loadConfig } from '../dist/src/config.js';
+import { dirname, join } from 'node:path';
+import { getPaths, loadConfig, saveConfig } from '../dist/src/config.js';
 import { ensureService, installService, renderUnit, resolveExecutable, serviceStatus, uninstallService } from '../dist/src/service.js';
 import { main } from '../dist/src/cli.js';
+import { startDaemon } from '../dist/src/daemon.js';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'paj-rc service %-'));
@@ -127,6 +128,139 @@ test('executable resolution supports absolute and PATH paths with spaces', t => 
   const f = fixture(t);
   assert.equal(resolveExecutable('paj executable', { PATH: f.root }), f.pajCommand);
   assert.throws(() => resolveExecutable('missing', { PATH: f.root }), /not found/);
+});
+
+test('managed service status and on-demand start work before config; setup and uninstall do not touch the unit', async t => {
+  const f = fixture(t);
+  const target = join(f.root, 'declarative.service');
+  mkdirSync(dirname(f.paths.serviceFile), { recursive: true });
+  writeFileSync(target, 'managed unit');
+  const empty = join(f.root, 'empty.service');
+  writeFileSync(empty, '');
+  for (const link of [target, join(f.root, 'missing'), '/dev/null', empty, f.root]) {
+    const installed = link === target;
+    symlinkSync(link, f.paths.serviceFile);
+    f.calls.length = 0;
+    assert.deepEqual(serviceStatus(f), { configured: false, installed, active: installed, managed: true });
+    assert.equal(await ensureService(f), installed);
+    await assert.rejects(main(['setup', '--yes'], f), /externally managed/);
+    await assert.rejects(main(['uninstall', '--yes'], f), /externally managed/);
+    assert.deepEqual(f.calls, installed ? [['is-active', 'paj-rc.service'], ['start', 'paj-rc.service']] : []);
+    assert.equal(readlinkSync(f.paths.serviceFile), link);
+    assert.equal(existsSync(f.paths.configFile), false);
+    assert.equal(readFileSync(target, 'utf8'), 'managed unit');
+    rmSync(f.paths.serviceFile);
+  }
+});
+
+test('standalone uninstall leaves a declarative replacement intact', async t => {
+  const f = fixture(t);
+  await installService({ ...f, approved: true });
+  const target = join(f.root, 'declarative.service');
+  writeFileSync(target, 'replacement');
+  assert.throws(() => uninstallService({ ...f, approved: true, execute(args) {
+    assert.deepEqual(args, ['disable', '--now', 'paj-rc.service']);
+    rmSync(f.paths.serviceFile);
+    symlinkSync(target, f.paths.serviceFile);
+  } }), /externally managed/);
+  assert.equal(readlinkSync(f.paths.serviceFile), target);
+  assert.equal(readFileSync(f.paths.serviceFile, 'utf8'), 'replacement');
+});
+
+function daemonOptions(t, f, daemonFactory) {
+  const previous = new Map(['SIGINT', 'SIGTERM'].map(signal => [signal, process.listeners(signal)]));
+  t.after(() => {
+    for (const [signal, listeners] of previous) {
+      for (const listener of process.listeners(signal)) {
+        if (!listeners.includes(listener)) process.removeListener(signal, listener);
+      }
+    }
+  });
+  return { ...f, daemonFactory };
+}
+
+function stubDaemon(t, f, check) {
+  return daemonOptions(t, f, async config => { check(config); return { close() {} }; });
+}
+
+test('managed serve initializes only private defaults, and explicit Paj takes precedence without rewriting state', async t => {
+  const f = fixture(t);
+  const argv = ['serve', '--paj', f.pajCommand];
+  const seen = [];
+  const opts = stubDaemon(t, f, config => seen.push(config));
+  await main(argv, opts);
+  const fresh = loadConfig(f.paths);
+  assert.equal(fresh.pajCommand, undefined);
+  assert.deepEqual(fresh.allowedOrigins, ['http://127.0.0.1:43187', 'http://localhost:43187']);
+  assert.equal(fresh.idleTimeoutMs, 30000);
+  assert.equal(statSync(f.paths.configDir).mode & 0o777, 0o700);
+  assert.equal(statSync(f.paths.configFile).mode & 0o777, 0o600);
+  assert.deepEqual(seen[0], { ...fresh, pajCommand: f.pajCommand });
+  await assert.rejects(main(['serve'], opts), /absolute executable path/);
+  const custom = { ...fresh, port: 44433, idleTimeoutMs: 24242,
+    allowedOrigins: ['https://private.example'], pajCommand: '/obsolete/paj' };
+  saveConfig(custom, f.paths);
+  const browserFile = join(f.paths.configDir, 'browser-sessions.json');
+  writeFileSync(browserFile, '{"fixture":"browser state"}', { mode: 0o600 });
+  const configBefore = readFileSync(f.paths.configFile);
+  const browserBefore = readFileSync(browserFile);
+  await main(argv, opts);
+  assert.deepEqual(seen[1], { ...custom, pajCommand: f.pajCommand });
+  assert.deepEqual(readFileSync(f.paths.configFile), configBefore);
+  assert.deepEqual(readFileSync(browserFile), browserBefore);
+  assert.equal(existsSync(f.paths.serviceFile), false);
+  assert.deepEqual(f.calls, []);
+});
+
+test('standalone browser pairing survives a managed start without widening access', async t => {
+  const f = fixture(t);
+  await installService({ ...f, approved: true });
+  const pinnedPaj = join(f.root, 'pinned-paj');
+  writeFileSync(pinnedPaj, '#!/bin/sh\nprintf "[]\\n"\n', { mode: 0o700 });
+  const original = readFileSync(f.paths.configFile);
+  const config = loadConfig(f.paths);
+  const opts = daemonOptions(t, f, async (effective, options) => {
+    const daemon = await startDaemon({ ...effective, port: 0 }, options);
+    t.after(() => daemon.close());
+    return daemon;
+  });
+  const standalone = await main(['serve'], opts);
+  const reply = await fetch(`${standalone.address}/api/login`, { method: 'POST',
+    headers: { Origin: standalone.address, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: config.pairingKey }) });
+  assert.equal(reply.status, 200);
+  const cookie = reply.headers.get('set-cookie').split(';')[0];
+  await standalone.close();
+  const managed = await main(['serve', '--paj', pinnedPaj], opts);
+  assert.match(managed.address, /^http:\/\/127\.0\.0\.1:/);
+  assert.deepEqual(readFileSync(f.paths.configFile), original);
+  const sessions = `${managed.address}/api/sessions`;
+  assert.equal((await fetch(sessions)).status, 401);
+  assert.equal((await fetch(sessions, { headers: { Cookie: cookie, Origin: 'https://unapproved.example' } })).status, 403);
+  assert.equal((await fetch(sessions, { headers: { Cookie: cookie, Origin: managed.address } })).status, 200);
+});
+
+test('invalid overrides and insecure or malformed managed config fail without writes or fallback', async t => {
+  const f = fixture(t);
+  const nonexec = join(f.root, 'nonexec');
+  writeFileSync(nonexec, 'fixture', { mode: 0o600 });
+  const opts = stubDaemon(t, f, () => assert.fail('should not reach daemon'));
+  const overrides = ['paj', '.', f.root, nonexec, join(f.root, 'missing'), '/bad\npath'];
+  for (const value of overrides) await assert.rejects(main(['serve', '--paj', value], opts));
+  await assert.rejects(main(['serve', '--paj'], opts), /Missing value/);
+  await assert.rejects(main(['serve', '--paj', f.pajCommand, '--paj', f.pajCommand], opts), /duplicate/);
+  assert.equal(existsSync(f.paths.configFile), false);
+  await installService({ ...f, approved: true });
+  const original = readFileSync(f.paths.configFile);
+  await assert.rejects(main(['serve', '--paj', 'paj'], opts));
+  assert.deepEqual(readFileSync(f.paths.configFile), original);
+  chmodSync(f.paths.configFile, 0o644);
+  await assert.rejects(main(['serve', '--paj', f.pajCommand], opts), /owner-private/);
+  assert.deepEqual(readFileSync(f.paths.configFile), original);
+  chmodSync(f.paths.configFile, 0o600);
+  writeFileSync(f.paths.configFile, '{');
+  await assert.rejects(main(['serve', '--paj', f.pajCommand], opts), SyntaxError);
+  assert.equal(readFileSync(f.paths.configFile, 'utf8'), '{');
 });
 
 test('CLI serve closes cleanly on idle without exiting the host process', async t => {

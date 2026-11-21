@@ -79,7 +79,7 @@ async function body(request: IncomingMessage, limit = 128 * 1024): Promise<Recor
   }
 }
 
-export async function startDaemon(config: Config, options: DaemonOptions): Promise<Controller> {
+export async function startDaemon(config: Config & { pajCommand: string }, options: DaemonOptions): Promise<Controller> {
   const auth = createAuth(config.pairingKey, {
     file: join(options.paths.configDir ?? options.paths.runtimeDir, 'browser-sessions.json'),
   });

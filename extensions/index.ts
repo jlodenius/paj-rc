@@ -1,13 +1,13 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { fileURLToPath } from 'node:url';
 import { getPaths, loadConfig } from '../dist/src/config.js';
-import { ensureService } from '../dist/src/service.js';
+import { ensureService, managedServiceState } from '../dist/src/service.js';
 import { createSessionAdapter, isEligible } from '../dist/src/session.js';
 import type { PajAPI, SessionContext, SessionPI } from '../dist/src/session.js';
 import { createConnector } from '../dist/src/connector.js';
 
 export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
-  getPaths, loadConfig, ensureService, createSessionAdapter, createConnector, env: process.env,
+  getPaths, loadConfig, ensureService, managedServiceState, createSessionAdapter, createConnector, env: process.env,
 }) {
   let ctx: ExtensionContext | undefined;
   let paj: PajAPI | undefined;
@@ -42,13 +42,19 @@ export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
     try {
       paj = queryPaj();
       const snapshot = paj?.getSnapshot();
-      const config = dependencies.loadConfig();
-      if (!config || !paj || !isEligible(ctx as unknown as SessionContext, snapshot, { env: dependencies.env })) {
+      const paths = dependencies.getPaths();
+      const managed = dependencies.managedServiceState(paths);
+      if (managed === 'unavailable') {
         stopEndpoint();
-        status = !config ? 'setup required: use /rc setup' : 'not an eligible main TUI';
+        status = 'managed service unavailable: check your declarative unit';
         return;
       }
-      const paths = dependencies.getPaths();
+      const configured = Boolean(dependencies.loadConfig()) || managed === 'installed';
+      if (!configured || !paj || !isEligible(ctx as unknown as SessionContext, snapshot, { env: dependencies.env })) {
+        stopEndpoint();
+        status = !configured ? 'setup required: use /rc setup' : 'not an eligible main TUI';
+        return;
+      }
       const key = JSON.stringify([snapshot.identity, ctx.sessionManager.getSessionId(), paths.socketPath]);
       if (adapter && key === identityKey) {
         adapter.notifyState();
@@ -107,6 +113,10 @@ export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
         }
         setupPending = true;
         try {
+          if (dependencies.managedServiceState(dependencies.getPaths())) {
+            notify('Remote chat service is externally managed. Use /rc status, then pair with the CLI key.');
+            return;
+          }
           const setupContext = ctx;
           const eligibleSnapshot = () => {
             const snapshot = queryPaj()?.getSnapshot();
@@ -155,7 +165,9 @@ export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
         const config = dependencies.loadConfig();
         const safeSettings = config ? JSON.stringify({ port: config.port,
           idleTimeoutMs: config.idleTimeoutMs, allowedOrigins: config.allowedOrigins }, null, 2)
-          : 'Not configured; use /rc setup after reviewing the README.';
+          : dependencies.managedServiceState(dependencies.getPaths())
+            ? 'Service is externally managed; private settings are initialized on first daemon start.'
+            : 'Not configured; use /rc setup after reviewing the README.';
         notify(`${command === 'status' ? `Remote chat: ${status}\n` : ''}${safeSettings}\n` +
           `Inspect service: ${cliCommand} status\n` +
           `Change settings: ${cliCommand} settings --port PORT\n` +
