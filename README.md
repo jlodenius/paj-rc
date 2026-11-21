@@ -28,30 +28,65 @@ home.file.".pi/agent/extensions/paj-rc".source =
 
 With Home Manager, skip `pi install` for paj-rc.
 
-To also manage the **user service** declaratively, install `paj-rc.service` as a Home Manager
-symlink in `$XDG_CONFIG_HOME/systemd/user/` (normally `~/.config/systemd/user/`). Set `ExecStart`
-to the absolute `paj-rc` executable followed by `serve --paj /absolute/path/to/paj`, using the
-pinned Paj CLI from the same configuration. Keep the unit on demand (no `Install.WantedBy`),
-with `Restart=on-failure`, `UMask=0077`, and `NoNewPrivileges=yes`. If Pi uses a custom
-`PAJ_RUNTIME_DIR`, set the same value in the unit's environment.
+### Home Manager–managed user service
 
-If migrating from standalone setup, move the old regular unit out of the way before Home Manager
-activation. Don't run standalone setup or uninstall during activation. Keep
-`$XDG_CONFIG_HOME/paj-rc/`, including its pairing key and browser sessions. The daemon creates
-private defaults on first start only if no config exists. `--paj` overrides the old executable
-path without saving it to private config. Skip `/rc setup` for a declarative unit; reload Pi,
-then check `/rc status`. Change the unit through Home Manager, not `paj-rc setup` or `uninstall`.
+Installing the package and extension through Home Manager does not by itself manage the service.
+To let Home Manager own it too, define `systemd.user.services.paj-rc` in your Home Manager module.
+This example uses the same pinned packages as your `home.packages` and Pi extension setup:
+
+```nix
+{ inputs, pkgs, ... }:
+let
+  system = pkgs.stdenv.hostPlatform.system;
+  pajRc = inputs.paj-rc.packages.${system}.default;
+  paj = inputs.paj.packages.${system}.default;
+in {
+  systemd.user.services.paj-rc = {
+    Unit = {
+      Description = "Private browser control for live Paj sessions";
+      StartLimitIntervalSec = 60;
+      StartLimitBurst = 5;
+    };
+    Service = {
+      ExecStart = "${pajRc}/bin/paj-rc serve --paj ${paj}/bin/paj";
+      Restart = "on-failure";
+      RestartSec = 2;
+      UMask = "0077";
+      NoNewPrivileges = true;
+    };
+  };
+}
+```
+
+Home Manager installs a link at `$XDG_CONFIG_HOME/systemd/user/paj-rc.service` (normally under
+`~/.config`). Don't add `Install.WantedBy`: eligible Pi sessions start the service on demand,
+and an idle shutdown is not a failure. If Pi uses a custom `PAJ_RUNTIME_DIR`, pass the same
+value in the service's `Environment`.
+
+A normal update of the `paj` and `paj-rc` flake inputs followed by your NixOS switch (or
+Home Manager switch for a standalone Home Manager installation) updates both executable paths in
+the unit. An already running daemon uses the old binaries until it restarts. If activation did
+not restart it, use `systemctl --user try-restart paj-rc.service` to pick up the new paths without
+starting an idle service. Reload existing Pi sessions to use their updated extensions.
+
+Keep `$XDG_CONFIG_HOME/paj-rc/` out of Nix; it holds private settings, the pairing key, and browser
+sessions. `serve --paj` uses the pinned executable instead of any old path in that directory,
+without overwriting it. First start creates owner-private defaults only if no config exists.
+Existing settings and paired browsers survive the switch.
+
+**One-time handoff from standalone:** with the new unit ready to activate, stop the old user
+service. If the old `paj-rc.service` in the user config directory is a regular file installed by
+`paj-rc setup`, move just that file to a private backup outside the unit directory. Leave the
+private `paj-rc/` config directory untouched. Activate Home Manager and check that it owns the
+unit link, then reload Pi and check `/rc status`. Don't run standalone setup or uninstall while
+switching. Use Home Manager to change or remove the managed unit.
 
 ## Pair
 
 Use a live, interactive main Pi session (`primary` in Paj) with a matching Paj registration.
-Subagents and noninteractive sessions are not browser targets. In Pi, reload and, for standalone
-installations, approve the private user-service setup:
-
-```text
-/reload
-/rc setup
-```
+Subagents and noninteractive sessions are not browser targets. In Pi, run `/reload`. For a
+standalone service, run `/rc setup` and approve the private user-service setup. For a Home
+Manager–managed service, skip `/rc setup`: the eligible Pi session starts the configured unit.
 
 ```sh
 paj-rc status
