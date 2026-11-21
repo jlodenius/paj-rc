@@ -1,12 +1,25 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { validateImages, hashImages } from './images.js';
-import { boundedMessageText as boundedText, MESSAGE_TEXT_LIMIT as TEXT_LIMIT } from '../browser/text.js';
-import type { MainIdentity } from './protocol.js';
-import { MAX_COMMAND_NAME_LENGTH, COMMAND_PAGE_SIZE, COMMAND_PAGE_BYTE_LIMIT } from '../browser/commands.js';
+import { createHash, randomUUID } from "node:crypto";
+import { validateImages, hashImages } from "./images.js";
+import {
+  boundedMessageText as boundedText,
+  MESSAGE_TEXT_LIMIT as TEXT_LIMIT,
+} from "../browser/text.js";
+import type { MainIdentity } from "./protocol.js";
+import {
+  MAX_COMMAND_NAME_LENGTH,
+  COMMAND_PAGE_SIZE,
+  COMMAND_PAGE_BYTE_LIMIT,
+} from "../browser/commands.js";
 
 export interface PajSnapshot {
-  identity: MainIdentity & { spawnId?: string; parentTaskId?: string; taskId?: string;
-    child?: boolean; parentSessionId?: string; childTaskId?: string };
+  identity: MainIdentity & {
+    spawnId?: string;
+    parentTaskId?: string;
+    taskId?: string;
+    child?: boolean;
+    parentSessionId?: string;
+    childTaskId?: string;
+  };
   editorBusy?: boolean;
 }
 export interface PajAPI {
@@ -15,7 +28,10 @@ export interface PajAPI {
   tryReserve(token: string): boolean;
   release(token: string): unknown;
 }
-interface ContentPart { type: string; text?: string }
+interface ContentPart {
+  type: string;
+  text?: string;
+}
 interface SourceMessage {
   role: string;
   content?: string | ContentPart[];
@@ -26,7 +42,11 @@ interface SourceMessage {
   timestamp?: number;
   toolCallId?: string;
 }
-interface Entry extends SourceMessage { id: string; type: string; message?: SourceMessage }
+interface Entry extends SourceMessage {
+  id: string;
+  type: string;
+  message?: SourceMessage;
+}
 export interface SessionContext {
   mode: string;
   hasUI: boolean;
@@ -36,7 +56,11 @@ export interface SessionContext {
   model?: { input?: string[]; id?: string; provider?: string; name?: string };
   getContextUsage?(): { tokens: number | null; contextWindow: number };
 }
-interface Command { name: string; description?: string; source: string }
+interface Command {
+  name: string;
+  description?: string;
+  source: string;
+}
 interface PiEvent {
   message?: SourceMessage;
   assistantMessageEvent?: { type: string; delta?: string };
@@ -45,11 +69,24 @@ interface PiEvent {
 }
 export interface SessionPI {
   getCommands?(): Command[];
-  on(name: string, handler: (event: PiEvent, ctx: SessionContext) => void): (() => void) | void;
-  sendUserMessage(content: string | ({ type: string; text?: string; mimeType?: string; data?: string })[],
-    options: { expandPromptTemplates: boolean; deliverAs?: string }): unknown;
+  on(
+    name: string,
+    handler: (event: PiEvent, ctx: SessionContext) => void,
+  ): (() => void) | void;
+  sendUserMessage(
+    content:
+      | string
+      | { type: string; text?: string; mimeType?: string; data?: string }[],
+    options: { expandPromptTemplates: boolean; deliverAs?: string },
+  ): unknown;
 }
-interface ProjectedMessage { id: string; role: string; text: string; imageCount?: number; customType?: string }
+interface ProjectedMessage {
+  id: string;
+  role: string;
+  text: string;
+  imageCount?: number;
+  customType?: string;
+}
 interface Overlay {
   message: ProjectedMessage;
   source: WeakRef<SourceMessage>;
@@ -77,8 +114,15 @@ interface Submission {
   result?: { status: string; requestId: string; command?: string };
   error?: { code: string; message: string };
 }
-export interface SessionEvent { type: string; [key: string]: unknown }
-export interface EventFrame { type: string; seq: number; event: SessionEvent }
+export interface SessionEvent {
+  type: string;
+  [key: string]: unknown;
+}
+export interface EventFrame {
+  type: string;
+  seq: number;
+  event: SessionEvent;
+}
 interface AdapterOptions {
   pi: SessionPI;
   ctx: SessionContext;
@@ -89,26 +133,45 @@ interface AdapterOptions {
   dedupLimit?: number;
 }
 
-const fail = (code: string, message: string) => { throw Object.assign(new Error(message), { code }); };
+const fail = (code: string, message: string) => {
+  throw Object.assign(new Error(message), { code });
+};
 
-export function isEligible(ctx: SessionContext, snapshot: PajSnapshot, { env = process.env, pid = process.pid } = {}) {
+export function isEligible(
+  ctx: SessionContext,
+  snapshot: PajSnapshot,
+  { env = process.env, pid = process.pid } = {},
+) {
   const identity = snapshot?.identity;
-  return ctx?.mode === 'tui' && ctx.hasUI === true && identity?.role === 'primary' &&
-    identity.pid === pid && identity.piSessionId === ctx.sessionManager.getSessionId() &&
-    typeof identity.id === 'string' && Boolean(identity.id) &&
-    !identity.parentPiSessionId && !identity.spawnId && !identity.parentTaskId &&
-    !identity.taskId && !identity.child && !identity.parentSessionId && !identity.childTaskId &&
+  return (
+    ctx?.mode === "tui" &&
+    ctx.hasUI === true &&
+    identity?.role === "primary" &&
+    identity.pid === pid &&
+    identity.piSessionId === ctx.sessionManager.getSessionId() &&
+    typeof identity.id === "string" &&
+    Boolean(identity.id) &&
+    !identity.parentPiSessionId &&
+    !identity.spawnId &&
+    !identity.parentTaskId &&
+    !identity.taskId &&
+    !identity.child &&
+    !identity.parentSessionId &&
+    !identity.childTaskId &&
     !env.PAJ_PARENT_PI_SESSION_ID &&
-    !env.PAJ_SPAWN_ID && !env.PAJ_TASK_ID && !env.PAJ_PARENT_TASK_ID &&
-    (!env.PAJ_ROLE || env.PAJ_ROLE === 'primary');
+    !env.PAJ_SPAWN_ID &&
+    !env.PAJ_TASK_ID &&
+    !env.PAJ_PARENT_TASK_ID &&
+    (!env.PAJ_ROLE || env.PAJ_ROLE === "primary")
+  );
 }
 
-function textContent(content: SourceMessage['content']) {
-  if (typeof content === 'string') return boundedText(content);
-  if (!Array.isArray(content)) return '';
-  let text = '';
+function textContent(content: SourceMessage["content"]) {
+  if (typeof content === "string") return boundedText(content);
+  if (!Array.isArray(content)) return "";
+  let text = "";
   for (const part of content) {
-    if (part?.type === 'text' && typeof part.text === 'string') {
+    if (part?.type === "text" && typeof part.text === "string") {
       text += part.text.slice(0, TEXT_LIMIT - text.length);
       if (text.length >= TEXT_LIMIT) break;
     }
@@ -116,46 +179,90 @@ function textContent(content: SourceMessage['content']) {
   return boundedText(text);
 }
 
-export function projectMessage(message: SourceMessage, id: string): ProjectedMessage | null {
-  if (!message || (!['user', 'assistant', 'toolResult'].includes(message.role) &&
-      !(message.role === 'custom' && message.display === true))) return null;
-  const role = message.role === 'toolResult' ? 'tool'
-    : message.role === 'custom' ? 'assistant' : message.role;
-  const imageCount = message.role === 'user' && Array.isArray(message.content)
-    ? Math.min(3, message.content.filter(part => part?.type === 'image').length) : 0;
-  const text = role === 'tool'
-    ? `${String(message.toolName ?? 'Tool').slice(0, 100)}: ${message.isError ? 'failed' : 'completed'}`
-    : textContent(message.content) || (imageCount === 1 ? '[Image attached]'
-      : imageCount ? `[${imageCount} images attached]` : '');
-  return text ? { id, role, text,
-    ...(imageCount ? { imageCount } : {}),
-    ...(message.role === 'custom' && message.customType === 'paj-messages'
-      ? { customType: 'paj-messages' } : {}) } : null;
+export function projectMessage(
+  message: SourceMessage,
+  id: string,
+): ProjectedMessage | null {
+  if (
+    !message ||
+    (!["user", "assistant", "toolResult"].includes(message.role) &&
+      !(message.role === "custom" && message.display === true))
+  )
+    return null;
+  const role =
+    message.role === "toolResult"
+      ? "tool"
+      : message.role === "custom"
+        ? "assistant"
+        : message.role;
+  const imageCount =
+    message.role === "user" && Array.isArray(message.content)
+      ? Math.min(
+          3,
+          message.content.filter((part) => part?.type === "image").length,
+        )
+      : 0;
+  const text =
+    role === "tool"
+      ? `${String(message.toolName ?? "Tool").slice(0, 100)}: ${message.isError ? "failed" : "completed"}`
+      : textContent(message.content) ||
+        (imageCount === 1
+          ? "[Image attached]"
+          : imageCount
+            ? `[${imageCount} images attached]`
+            : "");
+  return text
+    ? {
+        id,
+        role,
+        text,
+        ...(imageCount ? { imageCount } : {}),
+        ...(message.role === "custom" && message.customType === "paj-messages"
+          ? { customType: "paj-messages" }
+          : {}),
+      }
+    : null;
 }
 
-function commandCatalog(pi: SessionPI, onUnsupported: (name: unknown) => void = () => {}) {
+function commandCatalog(
+  pi: SessionPI,
+  onUnsupported: (name: unknown) => void = () => {},
+) {
   try {
-    if (typeof pi.getCommands !== 'function') return undefined;
+    if (typeof pi.getCommands !== "function") return undefined;
     const catalog = pi.getCommands();
     if (!Array.isArray(catalog)) return [];
     const commands = [];
     const seen = new Set();
     for (const entry of catalog) {
-      if (typeof entry?.name === 'string') {
+      if (typeof entry?.name === "string") {
         if (seen.has(entry.name)) continue;
         seen.add(entry.name);
       }
-      if (!entry || typeof entry.name !== 'string' || !entry.name || entry.name.length > MAX_COMMAND_NAME_LENGTH ||
-          entry.name.startsWith('/') || /[\s\u0000-\u001f\u007f-\u009f]/u.test(entry.name) ||
-          !['extension', 'skill', 'prompt'].includes(entry.source) ||
-          (entry.source === 'skill' && (!entry.name.startsWith('skill:') || entry.name.length === 6)) ||
-          (entry.description !== undefined && typeof entry.description !== 'string')) {
+      if (
+        !entry ||
+        typeof entry.name !== "string" ||
+        !entry.name ||
+        entry.name.length > MAX_COMMAND_NAME_LENGTH ||
+        entry.name.startsWith("/") ||
+        /[\s\u0000-\u001f\u007f-\u009f]/u.test(entry.name) ||
+        !["extension", "skill", "prompt"].includes(entry.source) ||
+        (entry.source === "skill" &&
+          (!entry.name.startsWith("skill:") || entry.name.length === 6)) ||
+        (entry.description !== undefined &&
+          typeof entry.description !== "string")
+      ) {
         onUnsupported(entry?.name);
         continue;
       }
-      commands.push({ name: entry.name,
-        description: (entry.description || '').replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ').trim().slice(0, 240),
-        source: entry.source });
+      commands.push({
+        name: entry.name,
+        description: (entry.description || "")
+          .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+          .trim()
+          .slice(0, 240),
+        source: entry.source,
+      });
     }
     return commands;
   } catch {
@@ -172,16 +279,26 @@ function commandPage(commands: Command[], offset = 0) {
     page.push(command);
     bytes += size;
   }
-  return { commands: page,
-    commandsNext: commands.length > offset + page.length ? offset + page.length : null,
-    commandsRevision: createHash('sha256').update(JSON.stringify(commands)).digest('hex') };
+  return {
+    commands: page,
+    commandsNext:
+      commands.length > offset + page.length ? offset + page.length : null,
+    commandsRevision: createHash("sha256")
+      .update(JSON.stringify(commands))
+      .digest("hex"),
+  };
 }
 
-function modelMetadata(model: SessionContext['model']) {
+function modelMetadata(model: SessionContext["model"]) {
   const result: Record<string, string> = {};
-  for (const key of ['id', 'provider', 'name']) {
-    const value = model?.[key as 'id' | 'provider' | 'name'];
-    if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f\u007f]/u.test(value)) return null;
+  for (const key of ["id", "provider", "name"]) {
+    const value = model?.[key as "id" | "provider" | "name"];
+    if (
+      typeof value !== "string" ||
+      !value.trim() ||
+      /[\u0000-\u001f\u007f]/u.test(value)
+    )
+      return null;
     result[key] = value.slice(0, 200);
   }
   return result;
@@ -190,16 +307,29 @@ function modelMetadata(model: SessionContext['model']) {
 function contextMetadata(ctx: SessionContext) {
   try {
     const usage = ctx.getContextUsage?.();
-    if (!Number.isSafeInteger(usage?.contextWindow) || usage.contextWindow <= 0) return null;
-    return { tokens: Number.isSafeInteger(usage.tokens) && usage.tokens >= 0 ? usage.tokens : null,
-      contextWindow: usage.contextWindow };
+    if (!Number.isSafeInteger(usage?.contextWindow) || usage.contextWindow <= 0)
+      return null;
+    return {
+      tokens:
+        Number.isSafeInteger(usage.tokens) && usage.tokens >= 0
+          ? usage.tokens
+          : null,
+      contextWindow: usage.contextWindow,
+    };
   } catch {
     return null;
   }
 }
 
-export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = process.pid,
-  uuid = randomUUID, dedupLimit = 512 }: AdapterOptions) {
+export function createSessionAdapter({
+  pi,
+  ctx,
+  paj,
+  env = process.env,
+  pid = process.pid,
+  uuid = randomUUID,
+  dedupLimit = 512,
+}: AdapterOptions) {
   const sessionId = ctx.sessionManager.getSessionId();
   const identity = paj.getSnapshot().identity;
   const generation = uuid();
@@ -220,25 +350,38 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
   let reconcileTimer: ReturnType<typeof setTimeout>;
   let reconcileDelay = 25;
 
-  const eligible = () => !closed && paj.version === 1 &&
+  const eligible = () =>
+    !closed &&
+    paj.version === 1 &&
     isEligible(ctx, paj.getSnapshot(), { env, pid }) &&
     paj.getSnapshot().identity?.id === identity?.id;
   const assertEligible = () => {
-    if (!eligible()) fail('unavailable', 'Session is not an eligible live main TUI');
+    if (!eligible())
+      fail("unavailable", "Session is not an eligible live main TUI");
   };
-  const state = () => ({ busy: !ctx.isIdle() || leases.size > 0,
-    runId, editorBusy: Boolean(paj.getSnapshot().editorBusy),
+  const state = () => ({
+    busy: !ctx.isIdle() || leases.size > 0,
+    runId,
+    editorBusy: Boolean(paj.getSnapshot().editorBusy),
     terminalRequired: terminalDepth > 0,
-    supportsImages: Array.isArray(modelCtx.model?.input) && modelCtx.model.input.includes('image'),
-    model: modelMetadata(modelCtx.model), context: contextMetadata(modelCtx) });
+    supportsImages:
+      Array.isArray(modelCtx.model?.input) &&
+      modelCtx.model.input.includes("image"),
+    model: modelMetadata(modelCtx.model),
+    context: contextMetadata(modelCtx),
+  });
   const emit = (event: SessionEvent) => {
     if (!eligible()) return;
-    const frame = { type: 'event', seq: ++seq, event };
+    const frame = { type: "event", seq: ++seq, event };
     for (const listener of listeners) {
-      try { listener(frame); } catch { /* Transport errors cannot break the Pi event path. */ }
+      try {
+        listener(frame);
+      } catch {
+        /* Transport errors cannot break the Pi event path. */
+      }
     }
   };
-  const refreshState = () => emit({ type: 'state', state: state() });
+  const refreshState = () => emit({ type: "state", state: state() });
   const deferState = () => {
     if (metadataImmediate) return;
     const previous = JSON.stringify(state());
@@ -248,32 +391,50 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     });
     metadataImmediate.unref?.();
   };
-  const entryMessage = (entry: Entry) => entry.type === 'message' ? entry.message
-    : entry.type === 'custom_message' ? { ...entry, role: 'custom' } : null;
+  const entryMessage = (entry: Entry) =>
+    entry.type === "message"
+      ? entry.message
+      : entry.type === "custom_message"
+        ? { ...entry, role: "custom" }
+        : null;
   // Later async message_end handlers can postpone persistence beyond any event-loop boundary.
   const reconcileFinalized = (branch = ctx.sessionManager.getBranch()) => {
     const used = new Set();
     const previousLength = finalized.length;
     finalized = finalized.filter((overlay, overlayIndex) => {
-      const anchor = overlay.after == null ? -1 : branch.findIndex(entry => entry.id === overlay.after);
+      const anchor =
+        overlay.after == null
+          ? -1
+          : branch.findIndex((entry) => entry.id === overlay.after);
       if (overlay.after != null && anchor < 0) return true;
       for (let index = anchor + 1; index < branch.length; index++) {
         const entry = branch[index];
         if (used.has(entry.id)) continue;
         const value = entryMessage(entry);
         if (!value || value.role !== overlay.role) continue;
-        const sameIdentity = value === overlay.source.deref() ||
-          (overlay.role !== 'custom' && overlay.timestamp != null &&
-            value.timestamp === overlay.timestamp && value.toolCallId === overlay.toolCallId);
+        const sameIdentity =
+          value === overlay.source.deref() ||
+          (overlay.role !== "custom" &&
+            overlay.timestamp != null &&
+            value.timestamp === overlay.timestamp &&
+            value.toolCallId === overlay.toolCallId);
         const projected = sameIdentity ? null : projectMessage(value, entry.id);
-        const customMatch = overlay.role === 'custom' && value.customType === overlay.customType;
-        if (!sameIdentity && ((!customMatch && overlay.timestamp != null) ||
-            projected?.role !== overlay.message.role || projected?.text !== overlay.message.text)) continue;
+        const customMatch =
+          overlay.role === "custom" && value.customType === overlay.customType;
+        if (
+          !sameIdentity &&
+          ((!customMatch && overlay.timestamp != null) ||
+            projected?.role !== overlay.message.role ||
+            projected?.text !== overlay.message.text)
+        )
+          continue;
         used.add(entry.id);
         for (let next = overlayIndex + 1; next < finalized.length; next++) {
           const later = finalized[next];
-          const laterAnchor = later.after == null ? -1
-            : branch.findIndex(value => value.id === later.after);
+          const laterAnchor =
+            later.after == null
+              ? -1
+              : branch.findIndex((value) => value.id === later.after);
           if (laterAnchor < index) later.after = entry.id;
         }
         return false;
@@ -294,7 +455,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     if (!eligible()) return;
     if (reconcileFinalized()) {
       refreshState();
-      emit({ type: 'reset' });
+      emit({ type: "reset" });
     }
     if (!finalized.length) return;
     reconcileTimer = setTimeout(observePersistence, reconcileDelay);
@@ -306,119 +467,151 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
     leases.clear();
     leaseRunId = null;
   };
-  const on = (name: string, handler: (event: PiEvent, ctx: SessionContext) => void) => {
+  const on = (
+    name: string,
+    handler: (event: PiEvent, ctx: SessionContext) => void,
+  ) => {
     const unsubscribe = pi.on(name, (event, currentCtx) => {
-      if (!eligible() || currentCtx?.sessionManager.getSessionId() !== sessionId) return;
+      if (
+        !eligible() ||
+        currentCtx?.sessionManager.getSessionId() !== sessionId
+      )
+        return;
       modelCtx = currentCtx;
       handler(event, currentCtx);
     });
-    if (typeof unsubscribe === 'function') unsubscribers.push(unsubscribe);
+    if (typeof unsubscribe === "function") unsubscribers.push(unsubscribe);
   };
-  on('before_agent_start', () => {
+  on("before_agent_start", () => {
     if (!runId) runId = uuid();
-    emit({ type: 'state', state: state() });
+    emit({ type: "state", state: state() });
   });
-  on('agent_start', () => {
+  on("agent_start", () => {
     if (!runId) runId = uuid();
     releaseLeases();
-    emit({ type: 'state', state: state() });
+    emit({ type: "state", state: state() });
   });
-  on('agent_settled', () => {
+  on("agent_settled", () => {
     reconcileFinalized();
     releaseLeases();
     runId = null;
-    emit({ type: 'state', state: state() });
+    emit({ type: "state", state: state() });
     deferState();
-    emit({ type: 'reset' });
+    emit({ type: "reset" });
   });
-  on('model_select', () => {
+  on("model_select", () => {
     refreshState();
     deferState();
   });
-  for (const name of ['turn_end', 'agent_end']) {
+  for (const name of ["turn_end", "agent_end"]) {
     on(name, () => {
       refreshState();
       deferState();
     });
   }
-  on('ui_prompt_start', () => {
+  on("ui_prompt_start", () => {
     terminalDepth++;
-    emit({ type: 'state', state: state() });
+    emit({ type: "state", state: state() });
   });
-  on('ui_prompt_end', () => {
+  on("ui_prompt_end", () => {
     terminalDepth = Math.max(0, terminalDepth - 1);
-    emit({ type: 'state', state: state() });
+    emit({ type: "state", state: state() });
   });
-  on('message_start', (event) => {
-    if (event.message.role === 'assistant') partial = { id: uuid(), role: 'assistant', text: '' };
+  on("message_start", (event) => {
+    if (event.message.role === "assistant")
+      partial = { id: uuid(), role: "assistant", text: "" };
   });
-  on('message_update', (event) => {
+  on("message_update", (event) => {
     const update = event.assistantMessageEvent;
-    if (update?.type !== 'text_delta' || typeof update.delta !== 'string') return;
-    partial ??= { id: uuid(), role: 'assistant', text: '' };
+    if (update?.type !== "text_delta" || typeof update.delta !== "string")
+      return;
+    partial ??= { id: uuid(), role: "assistant", text: "" };
     const text = update.delta.slice(0, TEXT_LIMIT - partial.text.length);
     partial.text += text;
-    if (text) emit({ type: 'delta', messageId: partial.id, text });
+    if (text) emit({ type: "delta", messageId: partial.id, text });
   });
-  on('message_end', (event) => {
+  on("message_end", (event) => {
     refreshState();
     deferState();
-    const message = projectMessage(event.message,
-      event.message.role === 'assistant' && partial ? partial.id : uuid());
+    const message = projectMessage(
+      event.message,
+      event.message.role === "assistant" && partial ? partial.id : uuid(),
+    );
     if (message) {
       const branch = ctx.sessionManager.getBranch();
-      finalized.push({ message, source: new WeakRef(event.message), role: event.message.role,
-        timestamp: event.message.timestamp, toolCallId: event.message.toolCallId,
+      finalized.push({
+        message,
+        source: new WeakRef(event.message),
+        role: event.message.role,
+        timestamp: event.message.timestamp,
+        toolCallId: event.message.toolCallId,
         customType: event.message.customType,
-        after: branch.at(-1)?.id ?? null });
+        after: branch.at(-1)?.id ?? null,
+      });
       if (finalized.length > 100) finalized.shift();
-      emit({ type: 'message', message });
+      emit({ type: "message", message });
     }
-    if (event.message.role === 'assistant') partial = null;
+    if (event.message.role === "assistant") partial = null;
     if (finalized.length && !reconcileImmediate && !reconcileTimer) {
       reconcileDelay = 25;
       reconcileImmediate = setImmediate(observePersistence);
       reconcileImmediate.unref?.();
     }
   });
-  for (const name of ['session_tree', 'session_compact']) {
+  for (const name of ["session_tree", "session_compact"]) {
     on(name, () => {
       cancelReconciliation();
       finalized = [];
       partial = null;
       refreshState();
       deferState();
-      emit({ type: 'reset' });
+      emit({ type: "reset" });
     });
   }
-  on('session_compact_failed', () => {
+  on("session_compact_failed", () => {
     reconcileFinalized();
     refreshState();
     deferState();
-    emit({ type: 'reset' });
+    emit({ type: "reset" });
   });
-  on('tool_execution_start', (event) => {
-    emit({ type: 'message', message: { id: `tool:${event.toolCallId}`, role: 'tool',
-      text: `${String(event.toolName).slice(0, 100)}: running` } });
+  on("tool_execution_start", (event) => {
+    emit({
+      type: "message",
+      message: {
+        id: `tool:${event.toolCallId}`,
+        role: "tool",
+        text: `${String(event.toolName).slice(0, 100)}: running`,
+      },
+    });
   });
 
   function validateTarget(params: RequestParams) {
     assertEligible();
-    if (params?.generation !== generation) fail('stale_generation', 'Session generation changed');
+    if (params?.generation !== generation)
+      fail("stale_generation", "Session generation changed");
   }
   return {
     generation,
-    get seq() { return seq; },
+    get seq() {
+      return seq;
+    },
     identity,
     eligible,
     state,
-    subscribe(listener: (frame: EventFrame) => void) { listeners.add(listener); return () => listeners.delete(listener); },
-    notifyState() { emit({ type: 'state', state: state() }); },
+    subscribe(listener: (frame: EventFrame) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    notifyState() {
+      emit({ type: "state", state: state() });
+    },
     commands(params: RequestParams) {
       validateTarget(params);
-      if (!Number.isSafeInteger(params.offset) || params.offset < 0) fail('invalid_request', 'Invalid command offset');
+      if (!Number.isSafeInteger(params.offset) || params.offset < 0)
+        fail("invalid_request", "Invalid command offset");
       const page = commandPage(commandCatalog(pi) ?? [], params.offset);
-      if (params.commandsRevision !== page.commandsRevision) fail('stale_commands', 'Loaded commands changed; refresh the session');
+      if (params.commandsRevision !== page.commandsRevision)
+        fail("stale_commands", "Loaded commands changed; refresh the session");
       return { generation, ...page };
     },
     snapshot(params: RequestParams) {
@@ -426,7 +619,7 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
       const messages: ProjectedMessage[] = [];
       let cursorSeen = params.before == null;
       const branch = ctx.sessionManager.getBranch();
-      if (reconcileFinalized(branch)) emit({ type: 'reset' });
+      if (reconcileFinalized(branch)) emit({ type: "reset" });
       const append = (message: ProjectedMessage | null) => {
         if (!message) return;
         if (!cursorSeen) {
@@ -435,90 +628,162 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
         }
         messages.unshift(message);
       };
-      const live = finalized.map(overlay => overlay.message);
+      const live = finalized.map((overlay) => overlay.message);
       if (partial?.text) live.push({ ...partial });
-      for (let index = live.length - 1; index >= 0 && messages.length <= 100; index--) {
+      for (
+        let index = live.length - 1;
+        index >= 0 && messages.length <= 100;
+        index--
+      ) {
         append(live[index]);
       }
-      for (let index = branch.length - 1; index >= 0 && messages.length <= 100; index--) {
+      for (
+        let index = branch.length - 1;
+        index >= 0 && messages.length <= 100;
+        index--
+      ) {
         const entry = branch[index];
         append(projectMessage(entryMessage(entry), entry.id));
       }
-      if (!cursorSeen) fail('invalid_cursor', 'History cursor no longer exists; resnapshot');
+      if (!cursorSeen)
+        fail("invalid_cursor", "History cursor no longer exists; resnapshot");
       const hasMore = messages.length > 100;
       if (hasMore) messages.shift();
       const commands = commandCatalog(pi);
-      return { sessionId, generation, seq, state: state(), messages,
+      return {
+        sessionId,
+        generation,
+        seq,
+        state: state(),
+        messages,
         ...(commands === undefined ? {} : commandPage(commands)),
-        hasMore, before: hasMore ? messages[0].id : null };
+        hasMore,
+        before: hasMore ? messages[0].id : null,
+      };
     },
     prompt(params: RequestParams) {
       validateTarget(params);
       const { requestId, text, deliverAs } = params;
       const images = validateImages(params.images);
       const imageHash = hashImages(images);
-      if (typeof requestId !== 'string' || !/^[\w-]{1,128}$/.test(requestId) ||
-          typeof text !== 'string' || text.length > 16000 || (!text.trim() && !images.length) || Buffer.byteLength(text) > 65536 ||
-          !['reject', 'steer', 'followUp'].includes(deliverAs)) {
-        fail('invalid_request', 'A bounded text, request ID and explicit delivery choice are required');
+      if (
+        typeof requestId !== "string" ||
+        !/^[\w-]{1,128}$/.test(requestId) ||
+        typeof text !== "string" ||
+        text.length > 16000 ||
+        (!text.trim() && !images.length) ||
+        Buffer.byteLength(text) > 65536 ||
+        !["reject", "steer", "followUp"].includes(deliverAs)
+      ) {
+        fail(
+          "invalid_request",
+          "A bounded text, request ID and explicit delivery choice are required",
+        );
       }
       const previous = dedup.get(requestId);
       if (previous) {
-        if (previous.text !== text || previous.deliverAs !== deliverAs || previous.imageHash !== imageHash) {
-          fail('request_conflict', 'Request ID was already used for different input');
+        if (
+          previous.text !== text ||
+          previous.deliverAs !== deliverAs ||
+          previous.imageHash !== imageHash
+        ) {
+          fail(
+            "request_conflict",
+            "Request ID was already used for different input",
+          );
         }
         if (previous.error) fail(previous.error.code, previous.error.message);
         return { ...previous.result, duplicate: true };
       }
-      const nativeName = text.startsWith('/') ? text.slice(1).split(' ', 1)[0] : null;
+      const nativeName = text.startsWith("/")
+        ? text.slice(1).split(" ", 1)[0]
+        : null;
       const promptName = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)?.[1];
       let unsupported = false;
-      const catalog = commandCatalog(pi, name => {
-        if (typeof name === 'string' && (name === nativeName || name === promptName)) unsupported = true;
+      const catalog = commandCatalog(pi, (name) => {
+        if (
+          typeof name === "string" &&
+          (name === nativeName || name === promptName)
+        )
+          unsupported = true;
       });
-      if (unsupported) fail('unsupported_command', 'This loaded command has unsupported metadata; invoke it in the Pi terminal');
-      const command = catalog?.find(command => command.name ===
-        (command.source === 'prompt' ? promptName : nativeName));
-      const extensionCommand = command?.source === 'extension';
+      if (unsupported)
+        fail(
+          "unsupported_command",
+          "This loaded command has unsupported metadata; invoke it in the Pi terminal",
+        );
+      const command = catalog?.find(
+        (command) =>
+          command.name ===
+          (command.source === "prompt" ? promptName : nativeName),
+      );
+      const extensionCommand = command?.source === "extension";
       if (extensionCommand && images.length) {
-        fail('command_images', 'Extension commands receive text arguments only; remove photos before sending');
+        fail(
+          "command_images",
+          "Extension commands receive text arguments only; remove photos before sending",
+        );
       }
-      if (terminalDepth > 0) fail('terminal_required', 'Pi is waiting for an interaction in the terminal');
+      if (terminalDepth > 0)
+        fail(
+          "terminal_required",
+          "Pi is waiting for an interaction in the terminal",
+        );
       if (images.length && !state().supportsImages) {
-        fail('images_unsupported', 'The selected Pi model does not support images');
+        fail(
+          "images_unsupported",
+          "The selected Pi model does not support images",
+        );
       }
-      if (paj.getSnapshot().editorBusy) fail('editor_busy', 'An editor request owns this session');
-      const queueDuringRun = !ctx.isIdle() && Boolean(runId) && (extensionCommand || deliverAs !== 'reject');
+      if (paj.getSnapshot().editorBusy)
+        fail("editor_busy", "An editor request owns this session");
+      const queueDuringRun =
+        !ctx.isIdle() &&
+        Boolean(runId) &&
+        (extensionCommand || deliverAs !== "reject");
       const reuseLease = leases.size > 0;
       if (reuseLease && (!queueDuringRun || leaseRunId !== runId)) {
-        fail('busy', 'A previous submission has not started or settled');
+        fail("busy", "A previous submission has not started or settled");
       }
-      if (!extensionCommand && !ctx.isIdle() && deliverAs === 'reject') fail('busy', 'Choose steering or follow-up explicitly');
+      if (!extensionCommand && !ctx.isIdle() && deliverAs === "reject")
+        fail("busy", "Choose steering or follow-up explicitly");
       // Queued input shares its active run's reservation; uncertain idle dispatch stays exclusive.
-      const token = reuseLease ? leases.values().next().value : `${generation}:${requestId}`;
-      if (!paj.tryReserve(token)) fail('editor_busy', 'An editor request owns this session');
+      const token = reuseLease
+        ? leases.values().next().value
+        : `${generation}:${requestId}`;
+      if (!paj.tryReserve(token))
+        fail("editor_busy", "An editor request owns this session");
       if (!reuseLease) {
         leases.add(token);
         leaseRunId = queueDuringRun ? runId : null;
       }
       const record: Submission = { text, deliverAs, imageHash };
       dedup.set(requestId, record);
-      while (dedup.size > Math.max(1, dedupLimit)) dedup.delete(dedup.keys().next().value);
+      while (dedup.size > Math.max(1, dedupLimit))
+        dedup.delete(dedup.keys().next().value);
       try {
-        const content = images.length ? [
-          ...(text.trim() ? [{ type: 'text', text }] : []),
-          ...images.map(image => ({ type: 'image', ...image })),
-        ] : text;
-        pi.sendUserMessage(content, { expandPromptTemplates: Boolean(command),
-          ...(extensionCommand || deliverAs === 'reject' ? {} : { deliverAs }) });
+        const content = images.length
+          ? [
+              ...(text.trim() ? [{ type: "text", text }] : []),
+              ...images.map((image) => ({ type: "image", ...image })),
+            ]
+          : text;
+        pi.sendUserMessage(content, {
+          expandPromptTemplates: Boolean(command),
+          ...(extensionCommand || deliverAs === "reject" ? {} : { deliverAs }),
+        });
         // Command dispatch has no public completion event and may never start an agent run.
         if (extensionCommand && !reuseLease) {
           leases.delete(token);
           paj.release(token);
           leaseRunId = null;
         }
-        record.result = { status: 'submitted', requestId, ...(extensionCommand ? { command: command.name } : {}) };
-        emit({ type: 'state', state: state() });
+        record.result = {
+          status: "submitted",
+          requestId,
+          ...(extensionCommand ? { command: command.name } : {}),
+        };
+        emit({ type: "state", state: state() });
         return record.result;
       } catch (error) {
         if (!reuseLease) {
@@ -526,18 +791,22 @@ export function createSessionAdapter({ pi, ctx, paj, env = process.env, pid = pr
           paj.release(token);
           leaseRunId = null;
         }
-        record.error = { code: 'submission_failed', message: 'Pi could not submit this input' };
+        record.error = {
+          code: "submission_failed",
+          message: "Pi could not submit this input",
+        };
         fail(record.error.code, record.error.message);
       }
     },
     abort(params: RequestParams) {
       validateTarget(params);
-      if (paj.getSnapshot().editorBusy) fail('editor_busy', 'An editor request owns this session');
+      if (paj.getSnapshot().editorBusy)
+        fail("editor_busy", "An editor request owns this session");
       if (!runId || params.runId !== runId || ctx.isIdle()) {
-        fail('stale_run', 'The requested run is no longer active');
+        fail("stale_run", "The requested run is no longer active");
       }
       ctx.abort();
-      return { status: 'submitted', runId };
+      return { status: "submitted", runId };
     },
     close() {
       if (closed) return;

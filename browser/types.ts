@@ -1,4 +1,8 @@
-export interface Command { name: string; source: string; description?: string }
+export interface Command {
+  name: string;
+  source: string;
+  description?: string;
+}
 export interface SessionState {
   busy?: boolean;
   runId?: string | null;
@@ -8,7 +12,8 @@ export interface SessionState {
   model?: { id: string; provider: string; name?: string } | null;
   context?: { tokens: number | null; contextWindow: number } | null;
 }
-export type SubmissionStatus = 'submitting' | 'submitted' | 'unknown' | 'rejected';
+export type SubmissionStatus =
+  "submitting" | "submitted" | "unknown" | "rejected";
 export interface Message {
   id: string;
   role: string;
@@ -41,10 +46,10 @@ export interface Envelope {
   generation: string;
   seq: number;
   event:
-    | { type: 'state'; state: SessionState }
-    | { type: 'message'; message: Message }
-    | { type: 'delta'; messageId: string; text: string }
-    | { type: 'reset' };
+    | { type: "state"; state: SessionState }
+    | { type: "message"; message: Message }
+    | { type: "delta"; messageId: string; text: string }
+    | { type: "reset" };
 }
 export interface Session {
   id: string;

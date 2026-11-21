@@ -12,7 +12,7 @@
         pname = "paj-rc";
         version = (builtins.fromJSON (builtins.readFile ./package.json)).version;
         src = self;
-        npmDepsHash = "sha256-SUNVq2LUZxwWR3CFya8b+2o21Ll7MnthpgQE5Pqvozs=";
+        npmDepsHash = "sha256-CkbJdDo2c2JVknQM87n21qRppLX9e/sK2psI4h4T6Us=";
         nativeBuildInputs = [pkgs.makeWrapper];
         npmBuildScript = "build";
         doCheck = true;

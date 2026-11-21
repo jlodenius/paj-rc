@@ -14,6 +14,8 @@
   },
   "scripts": {
     "build": "node scripts/build.ts",
+    "format": "prettier --no-config --write --no-error-on-unmatched-pattern \"**/*.ts\"",
+    "format:check": "prettier --no-config --check --no-error-on-unmatched-pattern \"**/*.ts\"",
     "typecheck": "npm run build && tsc --noEmit && tsc -p tsconfig.browser.json --noEmit && tsc -p tsconfig.extension.json",
     "prepare": "npm run build",
     "test": "npm run build && node --test tests/*.test.js",
@@ -50,6 +52,7 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^1.5.2",
     "@types/node": "^22.20.5",
+    "prettier": "3.10.1",
     "typebox": "^1.4.7",
     "typescript": "~5.9.3"
   }

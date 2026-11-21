@@ -1,31 +1,52 @@
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { fileURLToPath } from 'node:url';
-import { getPaths, loadConfig } from '../dist/src/config.js';
-import { ensureService, managedServiceState } from '../dist/src/service.js';
-import { createSessionAdapter, isEligible } from '../dist/src/session.js';
-import type { PajAPI, SessionContext, SessionPI } from '../dist/src/session.js';
-import { createConnector } from '../dist/src/connector.js';
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { fileURLToPath } from "node:url";
+import { getPaths, loadConfig } from "../dist/src/config.js";
+import { ensureService, managedServiceState } from "../dist/src/service.js";
+import { createSessionAdapter, isEligible } from "../dist/src/session.js";
+import type { PajAPI, SessionContext, SessionPI } from "../dist/src/session.js";
+import { createConnector } from "../dist/src/connector.js";
 
-export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
-  getPaths, loadConfig, ensureService, managedServiceState, createSessionAdapter, createConnector, env: process.env,
-}) {
+export function installRemoteExtension(
+  pi: ExtensionAPI,
+  dependencies = {
+    getPaths,
+    loadConfig,
+    ensureService,
+    managedServiceState,
+    createSessionAdapter,
+    createConnector,
+    env: process.env,
+  },
+) {
   let ctx: ExtensionContext | undefined;
   let paj: PajAPI | undefined;
   let adapter: ReturnType<typeof createSessionAdapter> | undefined;
   let connector: ReturnType<typeof createConnector> | undefined;
   let identityKey: string | undefined;
-  let status = 'inactive';
+  let status = "inactive";
   let refreshHandle: ReturnType<typeof setImmediate> | undefined;
   let configTimer: ReturnType<typeof setInterval> | undefined;
   let setupPending = false;
-  const cliPath = fileURLToPath(new URL('../dist/src/cli.js', import.meta.url));
+  const cliPath = fileURLToPath(new URL("../dist/src/cli.js", import.meta.url));
   const cliCommand = [process.execPath, cliPath]
-    .map(value => `'${value.replaceAll("'", "'\\''")}'`).join(' ');
+    .map((value) => `'${value.replaceAll("'", "'\\''")}'`)
+    .join(" ");
   const queryPaj = () => {
     let api: PajAPI | undefined;
-    pi.events.emit('paj:external:v1', { reply: (value: unknown) => {
-      if (value && typeof value === 'object' && 'version' in value && value.version === 1) api = value as PajAPI;
-    } });
+    pi.events.emit("paj:external:v1", {
+      reply: (value: unknown) => {
+        if (
+          value &&
+          typeof value === "object" &&
+          "version" in value &&
+          value.version === 1
+        )
+          api = value as PajAPI;
+      },
+    });
     return api;
   };
 
@@ -35,7 +56,7 @@ export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
     connector = undefined;
     adapter = undefined;
     identityKey = undefined;
-    status = 'inactive';
+    status = "inactive";
   };
   const refresh = () => {
     if (!ctx) return;
@@ -44,28 +65,51 @@ export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
       const snapshot = paj?.getSnapshot();
       const paths = dependencies.getPaths();
       const managed = dependencies.managedServiceState(paths);
-      if (managed === 'unavailable') {
+      if (managed === "unavailable") {
         stopEndpoint();
-        status = 'managed service unavailable: check your declarative unit';
+        status = "managed service unavailable: check your declarative unit";
         return;
       }
-      const configured = Boolean(dependencies.loadConfig()) || managed === 'installed';
-      if (!configured || !paj || !isEligible(ctx as unknown as SessionContext, snapshot, { env: dependencies.env })) {
+      const configured =
+        Boolean(dependencies.loadConfig()) || managed === "installed";
+      if (
+        !configured ||
+        !paj ||
+        !isEligible(ctx as unknown as SessionContext, snapshot, {
+          env: dependencies.env,
+        })
+      ) {
         stopEndpoint();
-        status = !configured ? 'setup required: use /rc setup' : 'not an eligible main TUI';
+        status = !configured
+          ? "setup required: use /rc setup"
+          : "not an eligible main TUI";
         return;
       }
-      const key = JSON.stringify([snapshot.identity, ctx.sessionManager.getSessionId(), paths.socketPath]);
+      const key = JSON.stringify([
+        snapshot.identity,
+        ctx.sessionManager.getSessionId(),
+        paths.socketPath,
+      ]);
       if (adapter && key === identityKey) {
         adapter.notifyState();
         return;
       }
       stopEndpoint();
       identityKey = key;
-      adapter = dependencies.createSessionAdapter({ pi: pi as unknown as SessionPI, ctx: ctx as unknown as SessionContext, paj, env: dependencies.env });
-      connector = dependencies.createConnector({ adapter, socketPath: paths.socketPath,
+      adapter = dependencies.createSessionAdapter({
+        pi: pi as unknown as SessionPI,
+        ctx: ctx as unknown as SessionContext,
+        paj,
+        env: dependencies.env,
+      });
+      connector = dependencies.createConnector({
+        adapter,
+        socketPath: paths.socketPath,
         ensureService: dependencies.ensureService,
-        onStatus: (next: string) => { status = next; } });
+        onStatus: (next: string) => {
+          status = next;
+        },
+      });
       connector.start();
     } catch {
       stopEndpoint();
@@ -80,8 +124,8 @@ export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
     });
     refreshHandle.unref?.();
   };
-  const unsubscribe = pi.events.on('paj:external:changed:v1', scheduleRefresh);
-  pi.on('session_start', (_event, current) => {
+  const unsubscribe = pi.events.on("paj:external:changed:v1", scheduleRefresh);
+  pi.on("session_start", (_event, current) => {
     stopEndpoint();
     ctx = current;
     refresh();
@@ -89,91 +133,129 @@ export function installRemoteExtension(pi: ExtensionAPI, dependencies = {
     configTimer = setInterval(scheduleRefresh, 5000);
     configTimer.unref?.();
   });
-  pi.on('session_shutdown', (event) => {
+  pi.on("session_shutdown", (event) => {
     ctx = undefined;
     clearImmediate(refreshHandle);
     refreshHandle = undefined;
     clearInterval(configTimer);
     configTimer = undefined;
     stopEndpoint();
-    if (event.reason === 'quit' || event.reason === 'reload') unsubscribe();
+    if (event.reason === "quit" || event.reason === "reload") unsubscribe();
   });
-  pi.registerCommand('rc', {
-    description: 'Remote chat setup, status and sanitized settings',
+  pi.registerCommand("rc", {
+    description: "Remote chat setup, status and sanitized settings",
     handler: async (args, current) => {
-      const notify = (message: string, level: 'info' | 'error' = 'info') => {
+      const notify = (message: string, level: "info" | "error" = "info") => {
         if (current.hasUI) current.ui.notify(message, level);
       };
       refresh();
-      const command = args.trim() || 'status';
-      if (command === 'setup') {
+      const command = args.trim() || "status";
+      if (command === "setup") {
         if (setupPending) {
-          notify('Remote chat setup is already pending.');
+          notify("Remote chat setup is already pending.");
           return;
         }
         setupPending = true;
         try {
           if (dependencies.managedServiceState(dependencies.getPaths())) {
-            notify('Remote chat service is externally managed. Use /rc status, then pair with the CLI key.');
+            notify(
+              "Remote chat service is externally managed. Use /rc status, then pair with the CLI key.",
+            );
             return;
           }
           const setupContext = ctx;
           const eligibleSnapshot = () => {
             const snapshot = queryPaj()?.getSnapshot();
-            return ctx && ctx === setupContext &&
-              ctx.sessionManager.getSessionId() === current.sessionManager.getSessionId() &&
-              isEligible(current as unknown as SessionContext, snapshot, { env: dependencies.env }) ? snapshot : null;
+            return ctx &&
+              ctx === setupContext &&
+              ctx.sessionManager.getSessionId() ===
+                current.sessionManager.getSessionId() &&
+              isEligible(current as unknown as SessionContext, snapshot, {
+                env: dependencies.env,
+              })
+              ? snapshot
+              : null;
           };
           const before = eligibleSnapshot();
           if (!before) {
-            notify('Setup requires a live, compatible Paj primary session in the main TUI.');
+            notify(
+              "Setup requires a live, compatible Paj primary session in the main TUI.",
+            );
             return;
           }
-          const approved = await current.ui.confirm('Set up remote chat?',
-            'Install private authentication/configuration and a systemd user unit? ' +
-            'It is not enabled at login. The service will start for this eligible session.\n' +
-            `Command: ${cliCommand} setup --yes`, { timeout: 60000 });
+          const approved = await current.ui.confirm(
+            "Set up remote chat?",
+            "Install private authentication/configuration and a systemd user unit? " +
+              "It is not enabled at login. The service will start for this eligible session.\n" +
+              `Command: ${cliCommand} setup --yes`,
+            { timeout: 60000 },
+          );
           if (!approved) {
-            notify('Remote chat setup canceled; nothing installed.');
+            notify("Remote chat setup canceled; nothing installed.");
             return;
           }
           if (eligibleSnapshot()?.identity.id !== before.identity.id) {
-            notify('Session eligibility changed; setup canceled.');
+            notify("Session eligibility changed; setup canceled.");
             return;
           }
-          const result = await pi.exec(process.execPath, [cliPath, 'setup', '--yes'], { timeout: 30000 });
+          const result = await pi.exec(
+            process.execPath,
+            [cliPath, "setup", "--yes"],
+            { timeout: 30000 },
+          );
           if (result.killed || result.code !== 0) {
-            notify(`Remote chat setup failed${result.killed ? ' or timed out' : ` (exit ${result.code})`}. ` +
-              `Review setup in a terminal: ${cliCommand} setup --yes`, 'error');
+            notify(
+              `Remote chat setup failed${result.killed ? " or timed out" : ` (exit ${result.code})`}. ` +
+                `Review setup in a terminal: ${cliCommand} setup --yes`,
+              "error",
+            );
             return;
           }
           refresh();
-          notify('Remote chat setup complete. Use /rc status to check connectivity. ' +
-            `To pair, run ${cliCommand} key in a private terminal; it prints a secret.`);
+          notify(
+            "Remote chat setup complete. Use /rc status to check connectivity. " +
+              `To pair, run ${cliCommand} key in a private terminal; it prints a secret.`,
+          );
         } catch {
-          notify(`Remote chat setup unavailable. Review the README before running ${cliCommand} setup --yes.`, 'error');
+          notify(
+            `Remote chat setup unavailable. Review the README before running ${cliCommand} setup --yes.`,
+            "error",
+          );
         } finally {
           setupPending = false;
         }
         return;
       }
-      if (command !== 'status' && command !== 'settings') {
-        notify('Usage: /rc [status|setup|settings]');
+      if (command !== "status" && command !== "settings") {
+        notify("Usage: /rc [status|setup|settings]");
         return;
       }
       try {
         const config = dependencies.loadConfig();
-        const safeSettings = config ? JSON.stringify({ port: config.port,
-          idleTimeoutMs: config.idleTimeoutMs, allowedOrigins: config.allowedOrigins }, null, 2)
+        const safeSettings = config
+          ? JSON.stringify(
+              {
+                port: config.port,
+                idleTimeoutMs: config.idleTimeoutMs,
+                allowedOrigins: config.allowedOrigins,
+              },
+              null,
+              2,
+            )
           : dependencies.managedServiceState(dependencies.getPaths())
-            ? 'Service is externally managed; private settings are initialized on first daemon start.'
-            : 'Not configured; use /rc setup after reviewing the README.';
-        notify(`${command === 'status' ? `Remote chat: ${status}\n` : ''}${safeSettings}\n` +
-          `Inspect service: ${cliCommand} status\n` +
-          `Change settings: ${cliCommand} settings --port PORT\n` +
-          `Allowed origins: ${cliCommand} origin add HTTPS_ORIGIN`);
+            ? "Service is externally managed; private settings are initialized on first daemon start."
+            : "Not configured; use /rc setup after reviewing the README.";
+        notify(
+          `${command === "status" ? `Remote chat: ${status}\n` : ""}${safeSettings}\n` +
+            `Inspect service: ${cliCommand} status\n` +
+            `Change settings: ${cliCommand} settings --port PORT\n` +
+            `Allowed origins: ${cliCommand} origin add HTTPS_ORIGIN`,
+        );
       } catch {
-        notify(`Configuration unavailable. Inspect with ${cliCommand} status.`, 'error');
+        notify(
+          `Configuration unavailable. Inspect with ${cliCommand} status.`,
+          "error",
+        );
       }
     },
   });
