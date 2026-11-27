@@ -2,7 +2,10 @@
   description = "Private browser control for live main Paj and Pi sessions";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { self, nixpkgs }: let
+  outputs = {
+    self,
+    nixpkgs,
+  }: let
     forAllSystems = nixpkgs.lib.genAttrs ["aarch64-linux" "x86_64-linux"];
   in {
     packages = forAllSystems (system: let
@@ -10,7 +13,7 @@
     in {
       default = pkgs.buildNpmPackage {
         pname = "paj-rc";
-        version = (builtins.fromJSON (builtins.readFile ./package.json)).version;
+        inherit ((builtins.fromJSON (builtins.readFile ./package.json))) version;
         src = self;
         npmDepsHash = "sha256-CkbJdDo2c2JVknQM87n21qRppLX9e/sK2psI4h4T6Us=";
         nativeBuildInputs = [pkgs.makeWrapper];
